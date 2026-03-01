@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Database
+*.db
+*.sqlite3
+
+# Node
+node_modules/
+.next/
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+NUL
+
+# Claude Code
+.claude/
+
+# Temporary / sensitive files
+*.json.bak
+Userspaulogestao-contastoken.json
+check.json
+metrics/

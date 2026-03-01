@@ -1,0 +1,19 @@
+
+> gestao-contas-frontend@1.0.0 dev
+> next dev
+
+   ▲ Next.js 14.1.0
+   - Local:        http://localhost:3000
+   - Environments: .env.local
+
+ ✓ Ready in 2.8s
+ ○ Compiling /transacoes ...
+ ✓ Compiled /transacoes in 3.1s (803 modules)
+ ✓ Compiled in 552ms (374 modules)
+ ○ Compiling / ...
+ ✓ Compiled / in 656ms (799 modules)
+ ○ Compiling /importar ...
+ ✓ Compiled /importar in 663ms (839 modules)
+ ✓ Compiled /contas in 335ms (849 modules)
+ ○ Compiling /transacoes/pendentes ...
+ ✓ Compiled /transacoes/pendentes in 717ms (873 modules)
