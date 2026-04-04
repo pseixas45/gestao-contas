@@ -10,6 +10,8 @@ from app.models.exchange_rate import ExchangeRate, CurrencyCode
 from app.models.budget import Budget
 from app.models.cash_projection import CashProjectionItem
 from app.models.saved_report import SavedReportView
+from app.models.import_template import ImportTemplate
+from app.models.balance_log import AccountBalanceLog
 
 __all__ = [
     "User",
@@ -29,4 +31,6 @@ __all__ = [
     "Budget",
     "CashProjectionItem",
     "SavedReportView",
+    "ImportTemplate",
+    "AccountBalanceLog",
 ]

@@ -176,6 +176,416 @@ def test_rule(
     return RuleTestResult(matches=matches, matched_text=matched_text if matches else None)
 
 
+@router.post("/seed")
+def seed_common_rules(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Inserir regras de categorização comuns para cartões brasileiros.
+
+    Cria regras CONTAINS para merchants conhecidos, associando a categorias existentes.
+    Pula regras para categorias que não existem ou regras que já existem.
+    """
+    SEED_RULES = [
+        # ═══════════════════════════════════════════════════
+        # RESTAURANTE (~25 regras)
+        # ═══════════════════════════════════════════════════
+        ("ifood", "contains", "Restaurante"),
+        ("ifd*", "contains", "Restaurante"),
+        ("99food", "contains", "Restaurante"),
+        ("rappi", "contains", "Restaurante"),
+        ("restaurante", "contains", "Restaurante"),
+        ("pizzaria", "contains", "Restaurante"),
+        ("lanchonete", "contains", "Restaurante"),
+        ("padaria", "contains", "Restaurante"),
+        ("burger", "contains", "Restaurante"),
+        ("busger", "contains", "Restaurante"),
+        ("pecorelle", "contains", "Restaurante"),
+        ("churrasq", "contains", "Restaurante"),
+        ("oriental", "contains", "Restaurante"),
+        ("calle 54", "contains", "Restaurante"),
+        ("mania prime", "contains", "Restaurante"),
+        ("praca panamericana", "contains", "Restaurante"),
+        ("santa cla", "contains", "Restaurante"),
+        ("moema servicos", "contains", "Restaurante"),
+        ("outback", "contains", "Restaurante"),
+        ("madero", "contains", "Restaurante"),
+        ("mcdonald", "contains", "Restaurante"),
+        ("subway", "contains", "Restaurante"),
+        ("starbucks", "contains", "Restaurante"),
+        ("kfc", "contains", "Restaurante"),
+        ("habib", "contains", "Restaurante"),
+        ("nagumo", "contains", "Restaurante"),
+        ("uber eats", "contains", "Restaurante"),
+        ("zdelivery", "contains", "Restaurante"),
+        ("bob's", "contains", "Restaurante"),
+        ("china in box", "contains", "Restaurante"),
+        ("spoleto", "contains", "Restaurante"),
+        ("giraffas", "contains", "Restaurante"),
+        ("coco bambu", "contains", "Restaurante"),
+
+        # ═══════════════════════════════════════════════════
+        # SUPERMERCADO (~18 regras)
+        # ═══════════════════════════════════════════════════
+        ("supermercado", "contains", "Supermercado"),
+        ("carrefour", "contains", "Supermercado"),
+        ("daki", "contains", "Supermercado"),
+        ("extra hiper", "contains", "Supermercado"),
+        ("pao de acucar", "contains", "Supermercado"),
+        ("assai", "contains", "Supermercado"),
+        ("atacadao", "contains", "Supermercado"),
+        ("hortifruti", "contains", "Supermercado"),
+        ("natural da terra", "contains", "Supermercado"),
+        ("st marche", "contains", "Supermercado"),
+        ("sao roque", "contains", "Supermercado"),
+        ("hirota", "contains", "Supermercado"),
+        ("big bompreco", "contains", "Supermercado"),
+        ("dia superm", "contains", "Supermercado"),
+        ("oba hortifruti", "contains", "Supermercado"),
+        ("emporio santa", "contains", "Supermercado"),
+        ("mambo", "contains", "Supermercado"),
+        ("minuto pao", "contains", "Supermercado"),
+
+        # ═══════════════════════════════════════════════════
+        # TRANSPORTES (~15 regras)
+        # ═══════════════════════════════════════════════════
+        ("99app", "contains", "Transportes"),
+        ("dl*99 ride", "contains", "Transportes"),
+        ("dl*99", "contains", "Transportes"),
+        ("uber trip", "contains", "Transportes"),
+        ("uber *trip", "contains", "Transportes"),
+        ("tagitau", "contains", "Transportes"),
+        ("sem parar", "contains", "Transportes"),
+        ("semparar", "contains", "Transportes"),
+        ("connectcar", "contains", "Transportes"),
+        ("pedagio", "contains", "Transportes"),
+        ("pedágio", "contains", "Transportes"),
+        ("estaciona", "contains", "Transportes"),
+        ("estapar", "contains", "Transportes"),
+        ("zona azul", "contains", "Transportes"),
+        ("veloe", "contains", "Transportes"),
+        ("moovit", "contains", "Transportes"),
+
+        # ═══════════════════════════════════════════════════
+        # LAZER / ASSINATURAS (~30 regras)
+        # ═══════════════════════════════════════════════════
+        ("netflix", "contains", "Lazer"),
+        ("spotify", "contains", "Lazer"),
+        ("disney", "contains", "Lazer"),
+        ("amazon prime", "contains", "Lazer"),
+        ("amazonprimebr", "contains", "Lazer"),
+        ("amazon ad free", "contains", "Lazer"),
+        ("amazon prime canais", "contains", "Lazer"),
+        ("applecombill", "contains", "Lazer"),
+        ("apple.com", "contains", "Lazer"),
+        ("google youtube", "contains", "Lazer"),
+        ("claude.ai", "contains", "Lazer"),
+        ("folhadespaulo", "contains", "Lazer"),
+        ("nytim", "contains", "Lazer"),
+        ("ny times", "contains", "Lazer"),
+        ("wix.com", "contains", "Lazer"),
+        ("f1 tv", "contains", "Lazer"),
+        ("produtosuol", "contains", "Lazer"),
+        ("wsj", "contains", "Lazer"),
+        ("minimalclub", "contains", "Lazer"),
+        ("twilio", "contains", "Lazer"),
+        ("microsoft", "contains", "Lazer"),
+        ("ingresso.com", "contains", "Lazer"),
+        ("steamgames", "contains", "Lazer"),
+        ("steam games", "contains", "Lazer"),
+        ("loteriasonline", "contains", "Lazer"),
+        ("picpay", "contains", "Lazer"),
+        ("hbo max", "contains", "Lazer"),
+        ("max.com", "contains", "Lazer"),
+        ("paramount", "contains", "Lazer"),
+        ("globoplay", "contains", "Lazer"),
+        ("crunchyroll", "contains", "Lazer"),
+        ("deezer", "contains", "Lazer"),
+        ("playstation", "contains", "Lazer"),
+        ("xbox", "contains", "Lazer"),
+        ("cinema", "contains", "Lazer"),
+        ("cinemark", "contains", "Lazer"),
+        ("openai", "contains", "Lazer"),
+        ("chatgpt", "contains", "Lazer"),
+
+        # ═══════════════════════════════════════════════════
+        # SAÚDE (~18 regras)
+        # ═══════════════════════════════════════════════════
+        ("prudential", "contains", "Saúde"),
+        ("prudent*", "contains", "Saúde"),
+        ("farmacia", "contains", "Saúde"),
+        ("farmácia", "contains", "Saúde"),
+        ("drogaria", "contains", "Saúde"),
+        ("droga raia", "contains", "Saúde"),
+        ("drogaraia", "contains", "Saúde"),
+        ("drogasil", "contains", "Saúde"),
+        ("pacheco", "contains", "Saúde"),
+        ("sulamerica", "contains", "Saúde"),
+        ("amil", "contains", "Saúde"),
+        ("hapvida", "contains", "Saúde"),
+        ("unimed", "contains", "Saúde"),
+        ("fleury", "contains", "Saúde"),
+        ("dasa", "contains", "Saúde"),
+        ("einstein", "contains", "Saúde"),
+        ("laboratorio", "contains", "Saúde"),
+        ("laboratório", "contains", "Saúde"),
+        ("hospital", "contains", "Saúde"),
+        ("clinica", "contains", "Saúde"),
+        ("clínica", "contains", "Saúde"),
+        ("odonto", "contains", "Saúde"),
+        ("dentista", "contains", "Saúde"),
+
+        # ═══════════════════════════════════════════════════
+        # EDUCAÇÃO (~10 regras)
+        # ═══════════════════════════════════════════════════
+        ("escola", "contains", "Educação"),
+        ("faculdade", "contains", "Educação"),
+        ("universidade", "contains", "Educação"),
+        ("coursera", "contains", "Educação"),
+        ("udemy", "contains", "Educação"),
+        ("alura", "contains", "Educação"),
+        ("descomplica", "contains", "Educação"),
+        ("duolingo", "contains", "Educação"),
+        ("hotmart", "contains", "Educação"),
+        ("eduzz", "contains", "Educação"),
+
+        # ═══════════════════════════════════════════════════
+        # CONTAS RESIDENCIAIS (~12 regras)
+        # ═══════════════════════════════════════════════════
+        ("condominio", "contains", "Contas residenciais"),
+        ("condominial", "contains", "Contas residenciais"),
+        ("energia", "contains", "Contas residenciais"),
+        ("eletropaulo", "contains", "Contas residenciais"),
+        ("enel", "contains", "Contas residenciais"),
+        ("sabesp", "contains", "Contas residenciais"),
+        ("comgas", "contains", "Contas residenciais"),
+        ("comgás", "contains", "Contas residenciais"),
+        ("gas natural", "contains", "Contas residenciais"),
+        ("light s/a", "contains", "Contas residenciais"),
+        ("cpfl", "contains", "Contas residenciais"),
+        ("celpe", "contains", "Contas residenciais"),
+
+        # ═══════════════════════════════════════════════════
+        # MORADIA (~8 regras)
+        # ═══════════════════════════════════════════════════
+        ("imobiliaria", "contains", "Moradia"),
+        ("imobiliária", "contains", "Moradia"),
+        ("aluguel", "contains", "Moradia"),
+        ("iptu", "contains", "Moradia"),
+        ("condomínio", "contains", "Moradia"),
+        ("seguro residenc", "contains", "Moradia"),
+        ("mudanca", "contains", "Moradia"),
+        ("reforma", "contains", "Moradia"),
+
+        # ═══════════════════════════════════════════════════
+        # COMPRAS (~18 regras)
+        # ═══════════════════════════════════════════════════
+        ("amazonmktplc", "contains", "Compras"),
+        ("amazon.com.br", "contains", "Compras"),
+        ("itaushop", "contains", "Compras"),
+        ("samsung no itau", "contains", "Compras"),
+        ("positivo tecno", "contains", "Compras"),
+        ("iguasport", "contains", "Compras"),
+        ("elegancia", "contains", "Compras"),
+        ("mercadolivre", "contains", "Compras"),
+        ("mercado livre", "contains", "Compras"),
+        ("magalu", "contains", "Compras"),
+        ("magazine luiza", "contains", "Compras"),
+        ("americanas", "contains", "Compras"),
+        ("casas bahia", "contains", "Compras"),
+        ("shopee", "contains", "Compras"),
+        ("aliexpress", "contains", "Compras"),
+        ("shein", "contains", "Compras"),
+        ("centauro", "contains", "Compras"),
+        ("decathlon", "contains", "Compras"),
+        ("leroy merlin", "contains", "Compras"),
+        ("telhanorte", "contains", "Compras"),
+        ("kalunga", "contains", "Compras"),
+        ("livraria", "contains", "Compras"),
+        ("renner", "contains", "Compras"),
+        ("riachuelo", "contains", "Compras"),
+        ("cea", "contains", "Compras"),
+        ("zara", "contains", "Compras"),
+
+        # ═══════════════════════════════════════════════════
+        # VIAGENS (~16 regras)
+        # ═══════════════════════════════════════════════════
+        ("azul linhas", "contains", "Viagens"),
+        ("orinter tour", "contains", "Viagens"),
+        ("gol linhas", "contains", "Viagens"),
+        ("latam air", "contains", "Viagens"),
+        ("latam airlines", "contains", "Viagens"),
+        ("decolar", "contains", "Viagens"),
+        ("booking", "contains", "Viagens"),
+        ("airbnb", "contains", "Viagens"),
+        ("hotel", "contains", "Viagens"),
+        ("pousada", "contains", "Viagens"),
+        ("hostel", "contains", "Viagens"),
+        ("trivago", "contains", "Viagens"),
+        ("expedia", "contains", "Viagens"),
+        ("hurb", "contains", "Viagens"),
+        ("cvc viagens", "contains", "Viagens"),
+        ("smiles", "contains", "Viagens"),
+
+        # ═══════════════════════════════════════════════════
+        # SEGUROS (~10 regras)
+        # ═══════════════════════════════════════════════════
+        ("seguro", "contains", "Seguros"),
+        ("porto seguro", "contains", "Seguros"),
+        ("bradesco seguros", "contains", "Seguros"),
+        ("itau seguros", "contains", "Seguros"),
+        ("zurich", "contains", "Seguros"),
+        ("tokio marine", "contains", "Seguros"),
+        ("liberty seguros", "contains", "Seguros"),
+        ("allianz", "contains", "Seguros"),
+        ("mapfre", "contains", "Seguros"),
+        ("azul seguros", "contains", "Seguros"),
+
+        # ═══════════════════════════════════════════════════
+        # IMPOSTOS (~8 regras)
+        # ═══════════════════════════════════════════════════
+        ("iof compra", "contains", "Impostos"),
+        ("iof", "contains", "Impostos"),
+        ("irpf", "contains", "Impostos"),
+        ("darf", "contains", "Impostos"),
+        ("imposto", "contains", "Impostos"),
+        ("ipva", "contains", "Impostos"),
+        ("taxa", "contains", "Impostos"),
+        ("tributo", "contains", "Impostos"),
+
+        # ═══════════════════════════════════════════════════
+        # TARIFAS BANCÁRIAS (~8 regras)
+        # ═══════════════════════════════════════════════════
+        ("tarifa", "contains", "Tarifas Bancárias"),
+        ("anuidade", "contains", "Tarifas Bancárias"),
+        ("tarifa pacote", "contains", "Tarifas Bancárias"),
+        ("tar ", "contains", "Tarifas Bancárias"),
+        ("cobranca tarifa", "contains", "Tarifas Bancárias"),
+
+        # ═══════════════════════════════════════════════════
+        # JUROS (~4 regras)
+        # ═══════════════════════════════════════════════════
+        ("juros", "contains", "Juros"),
+        ("encargos", "contains", "Juros"),
+        ("multa atraso", "contains", "Juros"),
+        ("mora", "contains", "Juros"),
+
+        # ═══════════════════════════════════════════════════
+        # TRANSFERÊNCIA (~10 regras)
+        # ═══════════════════════════════════════════════════
+        ("pagamento efetuado", "contains", "Transferência"),
+        ("transferencia", "contains", "Transferência"),
+        ("transferência", "contains", "Transferência"),
+        ("pix enviado", "contains", "Transferência"),
+        ("pix recebido", "contains", "Transferência"),
+        ("ted", "contains", "Transferência"),
+        ("doc", "contains", "Transferência"),
+        ("pagto debito", "contains", "Transferência"),
+        ("pagto boleto", "contains", "Transferência"),
+
+        # ═══════════════════════════════════════════════════
+        # GINÁSTICA (~6 regras)
+        # ═══════════════════════════════════════════════════
+        ("academia", "contains", "Ginástica"),
+        ("smartfit", "contains", "Ginástica"),
+        ("smart fit", "contains", "Ginástica"),
+        ("bio ritmo", "contains", "Ginástica"),
+        ("bodytech", "contains", "Ginástica"),
+        ("gympass", "contains", "Ginástica"),
+        ("wellhub", "contains", "Ginástica"),
+        ("totalpass", "contains", "Ginástica"),
+
+        # ═══════════════════════════════════════════════════
+        # CUIDADO PESSOAL (~6 regras)
+        # ═══════════════════════════════════════════════════
+        ("salao", "contains", "Cuidado Pessoal"),
+        ("salão", "contains", "Cuidado Pessoal"),
+        ("barbearia", "contains", "Cuidado Pessoal"),
+        ("cabeleireiro", "contains", "Cuidado Pessoal"),
+        ("estetica", "contains", "Cuidado Pessoal"),
+        ("estética", "contains", "Cuidado Pessoal"),
+
+        # ═══════════════════════════════════════════════════
+        # RENDIMENTO / SALÁRIO (income)
+        # ═══════════════════════════════════════════════════
+        ("rendimento", "contains", "Rendimento"),
+        ("rend ", "contains", "Rendimento"),
+        ("salario", "contains", "Salário"),
+        ("salário", "contains", "Salário"),
+        ("folha pagamento", "contains", "Salário"),
+
+        # ═══════════════════════════════════════════════════
+        # RESGATE (transfer)
+        # ═══════════════════════════════════════════════════
+        ("resgate", "contains", "Resgate"),
+
+        # ═══════════════════════════════════════════════════
+        # APLICAÇÃO
+        # ═══════════════════════════════════════════════════
+        ("aplicacao", "contains", "Aplicação"),
+        ("aplicação", "contains", "Aplicação"),
+        ("investimento", "contains", "Aplicação"),
+    ]
+
+    created = 0
+    skipped_no_category = 0
+    skipped_existing = 0
+
+    # Cache de categorias
+    category_cache = {}
+
+    for pattern, match_type_str, category_name in SEED_RULES:
+        # Buscar categoria
+        cat_name_lower = category_name.lower()
+        if cat_name_lower not in category_cache:
+            cat = db.query(Category).filter(
+                Category.name.ilike(f"%{category_name}%")
+            ).first()
+            category_cache[cat_name_lower] = cat
+
+        category = category_cache[cat_name_lower]
+        if not category:
+            skipped_no_category += 1
+            continue
+
+        # Verificar se regra já existe
+        match_type_enum = MatchType.CONTAINS
+        existing = db.query(CategorizationRule).filter(
+            CategorizationRule.pattern.ilike(pattern),
+            CategorizationRule.match_type == match_type_enum,
+        ).first()
+
+        if existing:
+            skipped_existing += 1
+            continue
+
+        # Criar regra
+        rule = CategorizationRule(
+            category_id=category.id,
+            pattern=pattern,
+            match_type=match_type_enum,
+            priority=60,
+            is_active=True,
+        )
+        db.add(rule)
+        created += 1
+
+    db.commit()
+
+    total_rules = db.query(CategorizationRule).filter(
+        CategorizationRule.is_active == True
+    ).count()
+
+    return {
+        "message": f"Seed concluído: {created} regras criadas",
+        "rules_created": created,
+        "skipped_no_category": skipped_no_category,
+        "skipped_existing": skipped_existing,
+        "total_active_rules": total_rules,
+    }
+
+
 @router.post("/auto-generate")
 def auto_generate_rules(
     min_occurrences: int = 3,

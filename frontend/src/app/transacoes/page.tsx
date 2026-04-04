@@ -460,7 +460,10 @@ export default function TransacoesPage() {
                 placeholder="Todas as categorias"
                 value={filters.category_id}
                 onChange={(e) => setFilters({ ...filters, category_id: e.target.value })}
-                options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                options={[
+                  { value: 0, label: '⏳ Pendente (sem categoria)' },
+                  ...categories.map((c) => ({ value: c.id, label: c.name })),
+                ]}
               />
 
               <Input

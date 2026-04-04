@@ -10,7 +10,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, extract
+from sqlalchemy import func, and_, or_, extract
 
 from app.models.transaction import Transaction
 from app.models.category import Category
@@ -449,22 +449,32 @@ class ReportService:
             month_str = current.strftime('%Y-%m')
             year, m = current.year, current.month
 
-            # Receitas (valores positivos)
-            income = self.db.query(func.sum(amount_col)).filter(
-                and_(
-                    extract('year', Transaction.date) == year,
-                    extract('month', Transaction.date) == m,
-                    amount_col > 0
+            # IDs de categorias tipo "transfer" para excluir
+            from sqlalchemy import or_
+            transfer_cat_ids = [c.id for c in self.db.query(Category.id).filter(
+                Category.type == "transfer"
+            ).all()]
+
+            base_filter = [
+                extract('year', Transaction.date) == year,
+                extract('month', Transaction.date) == m,
+            ]
+            if transfer_cat_ids:
+                base_filter.append(
+                    or_(
+                        ~Transaction.category_id.in_(transfer_cat_ids),
+                        Transaction.category_id == None
+                    )
                 )
+
+            # Receitas (valores positivos, excluindo transferências)
+            income = self.db.query(func.sum(amount_col)).filter(
+                and_(*base_filter, amount_col > 0)
             ).scalar() or Decimal("0.00")
 
-            # Despesas (valores negativos)
+            # Despesas (valores negativos, excluindo transferências)
             expense = self.db.query(func.sum(amount_col)).filter(
-                and_(
-                    extract('year', Transaction.date) == year,
-                    extract('month', Transaction.date) == m,
-                    amount_col < 0
-                )
+                and_(*base_filter, amount_col < 0)
             ).scalar() or Decimal("0.00")
 
             expense = abs(expense)
@@ -591,7 +601,17 @@ class ReportService:
         if account_ids:
             query = query.filter(Transaction.account_id.in_(account_ids))
         if category_ids:
-            query = query.filter(Transaction.category_id.in_(category_ids))
+            # Suporte a category_id=0 para "Pendente (sem categoria)"
+            include_uncategorized = 0 in category_ids
+            real_cat_ids = [c for c in category_ids if c != 0]
+            if include_uncategorized and real_cat_ids:
+                query = query.filter(
+                    or_(Transaction.category_id.in_(real_cat_ids), Transaction.category_id.is_(None))
+                )
+            elif include_uncategorized:
+                query = query.filter(Transaction.category_id.is_(None))
+            else:
+                query = query.filter(Transaction.category_id.in_(real_cat_ids))
 
         results = query.group_by(
             Transaction.category_id,
@@ -603,11 +623,13 @@ class ReportService:
         all_categories = {c.id: c for c in self.db.query(Category).all()}
 
         # Organizar dados: {category_id: {month: amount}}
+        # category_id=None → usar 0 como chave para "Pendente"
         data = {}
         for r in results:
             if r.category_id is None:
-                continue
-            cat_id = r.category_id
+                if not (category_ids and 0 in category_ids):
+                    continue
+            cat_id = r.category_id if r.category_id is not None else 0
             month_key = f"{int(r.yr):04d}-{int(r.mo):02d}"
             if cat_id not in data:
                 data[cat_id] = {}
@@ -697,7 +719,16 @@ class ReportService:
         if account_ids:
             query = query.filter(Transaction.account_id.in_(account_ids))
         if category_ids:
-            query = query.filter(Transaction.category_id.in_(category_ids))
+            include_uncategorized = 0 in category_ids
+            real_cat_ids = [c for c in category_ids if c != 0]
+            if include_uncategorized and real_cat_ids:
+                query = query.filter(
+                    or_(Transaction.category_id.in_(real_cat_ids), Transaction.category_id.is_(None))
+                )
+            elif include_uncategorized:
+                query = query.filter(Transaction.category_id.is_(None))
+            else:
+                query = query.filter(Transaction.category_id.in_(real_cat_ids))
 
         query = query.order_by(Transaction.date, Transaction.id)
         transactions = query.all()

@@ -115,6 +115,7 @@ export interface ImportPreview {
   detected_mapping: ColumnMapping;
   preview_rows: Record<string, any>[];
   temp_file_path: string;
+  has_template: boolean;
 }
 
 export interface ImportResult {
@@ -128,6 +129,8 @@ export interface ImportResult {
   balance_validated: boolean;
   balance_matches: boolean;
   balance_difference: number | null;
+  installments_detected: number;
+  categories_assigned: number;
 }
 
 export interface UncertainRow {
@@ -138,6 +141,19 @@ export interface UncertainRow {
   similar_to_id: number;
   similar_to_description: string;
   similarity: number;
+}
+
+export interface TransactionPreviewRow {
+  row: number;
+  date: string;
+  description: string;
+  amount: number;
+  status: 'new' | 'duplicate' | 'uncertain';
+  is_installment: boolean;
+  adjusted_date: string | null;
+  running_balance: number | null;
+  file_balance: number | null;
+  balance_ok: boolean | null;
 }
 
 export interface ImportAnalysis {
@@ -152,6 +168,16 @@ export interface ImportAnalysis {
   date_range_end: string | null;
   overlap_info: string | null;
   uncertain_rows: UncertainRow[];
+  // Totais calculados para validação de saldo
+  calculated_total: number | null;
+  positive_total: number | null;
+  negative_total: number | null;
+  positive_count: number;
+  negative_count: number;
+  // Running balance
+  running_balance_final: number | null;
+  first_balance_divergence_row: number | null;
+  transactions_preview: TransactionPreviewRow[];
 }
 
 export interface OverlapCheckResponse {
@@ -196,4 +222,41 @@ export interface LoginCredentials {
 export interface LoginResponse {
   access_token: string;
   token_type: string;
+}
+
+// Dashboard
+export interface DashboardAccountBalance {
+  account_id: number;
+  account_name: string;
+  bank_name: string;
+  bank_color: string | null;
+  currency: string;
+  balance: number;
+  balance_brl: number;
+  account_type: string;
+}
+
+export interface DashboardTopCategory {
+  category_id: number;
+  category_name: string;
+  category_color: string | null;
+  amount: number;
+  percentage: number;
+}
+
+export interface DashboardMonthEvolution {
+  month: string;
+  income: number;
+  expense: number;
+  balance: number;
+}
+
+export interface DashboardSummary {
+  total_balance_brl: number;
+  month_income: number;
+  month_expenses: number;
+  pending_count: number;
+  accounts: DashboardAccountBalance[];
+  top_categories: DashboardTopCategory[];
+  monthly_evolution: DashboardMonthEvolution[];
 }

@@ -33,7 +33,7 @@ services:
       SECRET_KEY: sua-chave-secreta-mude-em-producao-123456789
       DEBUG: "true"
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./backend:/app
     depends_on:
@@ -48,9 +48,9 @@ services:
     container_name: gestao-contas-frontend
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8001
     ports:
-      - "3000:3000"
+      - "3002:3000"
     volumes:
       - ./frontend:/app
       - /app/node_modules

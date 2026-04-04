@@ -4,6 +4,7 @@ import './globals.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { ToastProvider } from '@/components/ui/Toast';
 
 export default function RootLayout({
   children,
@@ -13,22 +14,26 @@ export default function RootLayout({
   const [queryClient] = useState(() => new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 60 * 1000, // 1 minuto
+        staleTime: 60 * 1000,
         retry: 1,
       },
     },
   }));
 
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" className="antialiased">
       <head>
         <title>Gestão de Contas</title>
         <meta name="description" content="Sistema de Gestão de Contas Bancárias" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
-      <body>
+      <body className="font-sans">
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            {children}
+            <ToastProvider>
+              {children}
+            </ToastProvider>
           </AuthProvider>
         </QueryClientProvider>
       </body>

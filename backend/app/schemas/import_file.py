@@ -26,6 +26,9 @@ class ColumnMapping(BaseModel):
     # Campo de data de pagamento (cartão de crédito)
     card_payment_date_column: Optional[str] = None
 
+    # Campo de parcela (ex: "7 de 10")
+    installment_column: Optional[str] = None
+
 
 class ImportPreview(BaseModel):
     """Preview dos dados antes da importação."""
@@ -35,6 +38,7 @@ class ImportPreview(BaseModel):
     detected_mapping: ColumnMapping  # Mapeamento detectado automaticamente
     preview_rows: List[Dict[str, Any]]  # Primeiras 20 linhas
     temp_file_path: str
+    has_template: bool = False  # Se usou template salvo da conta
 
 
 class ValidationError(BaseModel):
@@ -112,6 +116,20 @@ class UncertainRow(BaseModel):
     similarity: float
 
 
+class TransactionPreviewRow(BaseModel):
+    """Preview de transação na análise (para revisão de saldo)."""
+    row: int
+    date: str
+    description: str
+    amount: Decimal
+    status: str  # "new", "duplicate", "uncertain"
+    is_installment: bool = False
+    adjusted_date: Optional[str] = None  # Data ajustada (parcelas em cartão)
+    running_balance: Optional[Decimal] = None  # Saldo acumulado para validação
+    file_balance: Optional[Decimal] = None  # Saldo do arquivo (se tiver coluna saldo)
+    balance_ok: Optional[bool] = None  # Se running_balance == file_balance
+
+
 class ImportAnalysis(BaseModel):
     """Resultado da análise prévia (dry-run) de importação."""
     batch_id: int
@@ -126,6 +144,20 @@ class ImportAnalysis(BaseModel):
     overlap_info: Optional[str] = None
     uncertain_rows: List[UncertainRow] = []
 
+    # Totais calculados para validação de saldo
+    calculated_total: Optional[Decimal] = None      # Soma de todas as novas transações
+    positive_total: Optional[Decimal] = None         # Soma das positivas (débitos/compras)
+    negative_total: Optional[Decimal] = None         # Soma das negativas (créditos/pagamentos)
+    positive_count: int = 0
+    negative_count: int = 0
+
+    # Running balance
+    running_balance_final: Optional[Decimal] = None
+    first_balance_divergence_row: Optional[int] = None
+
+    # Lista completa de transações para revisão
+    transactions_preview: List[TransactionPreviewRow] = []
+
 
 class OverlapCheckResponse(BaseModel):
     """Resultado da verificação de sobreposição."""
@@ -133,6 +165,18 @@ class OverlapCheckResponse(BaseModel):
     existing_transaction_count: int
     overlapping_batches: List[dict] = []
     message: str
+
+
+class ImportTemplateSchema(BaseModel):
+    """Template de importação salvo por conta."""
+    id: Optional[int] = None
+    account_id: int
+    column_mapping: ColumnMapping
+    file_format_hints: Optional[Dict[str, Any]] = None
+    last_used_at: Optional[datetime] = None
+    success_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HistoricalImportProcess(BaseModel):

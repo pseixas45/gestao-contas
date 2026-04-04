@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from './Sidebar';
+import { ToastProvider } from '@/components/ui/Toast';
 import { transactionsApi } from '@/lib/api';
 
 interface MainLayoutProps {
@@ -16,7 +17,6 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Verificar se está autenticado
     const token = localStorage.getItem('token');
     if (!token) {
       router.push('/login');
@@ -26,23 +26,19 @@ export default function MainLayout({ children }: MainLayoutProps) {
     setIsAuthenticated(true);
     setIsLoading(false);
 
-    // Buscar contagem de pendentes
     const fetchPendingCount = async () => {
       try {
         const count = await transactionsApi.getPendingCount();
         setPendingCount(count);
       } catch (error) {
-        // Se erro 401, redirecionar para login
         if ((error as any)?.response?.status === 401) {
           localStorage.removeItem('token');
           router.push('/login');
         }
-        console.error('Erro ao buscar pendentes:', error);
       }
     };
 
     fetchPendingCount();
-    // Atualizar a cada 30 segundos
     const interval = setInterval(fetchPendingCount, 30000);
     return () => clearInterval(interval);
   }, [router]);
@@ -52,29 +48,31 @@ export default function MainLayout({ children }: MainLayoutProps) {
     router.push('/login');
   };
 
-  // Mostrar loading enquanto verifica autenticação
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Carregando...</p>
+          <div className="w-10 h-10 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin mx-auto" />
+          <p className="mt-3 text-sm text-slate-500">Carregando...</p>
         </div>
       </div>
     );
   }
 
-  // Não renderizar se não autenticado (vai redirecionar)
   if (!isAuthenticated) {
     return null;
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar pendingCount={pendingCount} onLogout={handleLogout} />
-      <main className="flex-1 p-8">
-        {children}
-      </main>
-    </div>
+    <ToastProvider>
+      <div className="flex min-h-screen bg-slate-50">
+        <Sidebar pendingCount={pendingCount} onLogout={handleLogout} />
+        <main className="flex-1 p-6 lg:p-8 overflow-x-hidden">
+          <div className="max-w-7xl mx-auto animate-fade-in">
+            {children}
+          </div>
+        </main>
+      </div>
+    </ToastProvider>
   );
 }

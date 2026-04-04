@@ -16,9 +16,13 @@ from app.schemas.import_file import (
     ImportAnalysis,
     UncertainRow,
     OverlapCheckResponse,
+    TransactionPreviewRow,
+    ImportTemplateSchema,
 )
 from app.services.import_service import ImportService
+from app.models.import_template import ImportTemplate
 from app.utils.security import get_current_active_user
+from app.services.balance_log_service import log_balance_change
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,10 +39,31 @@ async def upload_file(
     Upload de arquivo para importação.
 
     Retorna preview dos dados e mapeamento de colunas detectado.
+    Se existe template salvo para a conta, usa o mapeamento do template.
     """
+    import json
     service = ImportService(db)
     try:
-        return await service.upload_and_preview(file, account_id)
+        result = await service.upload_and_preview(file, account_id)
+
+        # Verificar se existe template salvo para esta conta
+        template = db.query(ImportTemplate).filter(
+            ImportTemplate.account_id == account_id
+        ).first()
+        if template:
+            saved_mapping = json.loads(template.column_mapping)
+            # Validar que as colunas do template existem no arquivo
+            available_cols = set(result.columns)
+            template_mapping = ColumnMapping(**saved_mapping)
+            required_ok = (
+                template_mapping.date_column in available_cols
+                and template_mapping.description_column in available_cols
+            )
+            if required_ok:
+                result.detected_mapping = template_mapping
+                result.has_template = True
+
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -58,17 +83,43 @@ async def process_import(
     - Detecta duplicatas
     - Categoriza automaticamente
     - Valida saldo (opcional)
+    - Salva template de mapeamento para reutilização
     """
+    import json
+    from datetime import datetime as dt
     service = ImportService(db)
     try:
-        return await service.process_import(
+        result = await service.process_import(
             batch_id=data.batch_id,
             column_mapping=data.column_mapping,
             account_id=data.account_id,
             validate_balance=data.validate_balance,
             expected_final_balance=data.expected_final_balance,
-            skip_duplicates=data.skip_duplicates
+            skip_duplicates=data.skip_duplicates,
+            card_payment_date_override=data.card_payment_date
         )
+
+        # Salvar/atualizar template se import teve sucesso
+        if result.success and result.imported_count > 0:
+            mapping_json = json.dumps(data.column_mapping.model_dump(exclude_none=True))
+            template = db.query(ImportTemplate).filter(
+                ImportTemplate.account_id == data.account_id
+            ).first()
+            if template:
+                template.column_mapping = mapping_json
+                template.last_used_at = dt.utcnow()
+                template.success_count += 1
+            else:
+                template = ImportTemplate(
+                    account_id=data.account_id,
+                    column_mapping=mapping_json,
+                    last_used_at=dt.utcnow(),
+                    success_count=1,
+                )
+                db.add(template)
+            db.commit()
+
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -88,7 +139,9 @@ async def analyze_import(
     Retorna estatísticas e linhas incertas para review do usuário.
     """
     from datetime import date as date_type
+    from decimal import Decimal
     from app.utils.normalization import normalize_for_hash, calculate_similarity, find_near_duplicate
+    from app.services.import_service import detect_installment, adjust_date_for_credit_card, find_previous_installment, get_installment_base_description
 
     service = ImportService(db)
 
@@ -123,6 +176,10 @@ async def analyze_import(
     uncertain_rows = []
     seen_hashes = set()
     all_dates = []
+    all_new_amounts = []  # Amounts of new (non-duplicate) transactions
+    transactions_preview = []  # All transactions for review
+    running_balance = Decimal("0")  # Saldo acumulado para validação linha a linha
+    first_balance_divergence_row = None  # Primeira linha onde saldo diverge
 
     for idx, row in enumerate(raw_data):
         try:
@@ -137,8 +194,6 @@ async def analyze_import(
             if not trans_date:
                 error_count += 1
                 continue
-
-            all_dates.append(trans_date)
 
             description = str(description).strip()
             if not description:
@@ -165,6 +220,21 @@ async def analyze_import(
                 error_count += 1
                 continue
 
+            # Running balance e saldo do arquivo
+            running_balance += amount
+            file_balance_val = None
+            balance_ok_val = None
+            if mapping.balance_column:
+                bal_str = row.get(mapping.balance_column)
+                if bal_str:
+                    file_balance_val = service._parse_amount(bal_str)
+                    if file_balance_val is not None:
+                        # Comparar com tolerância de 0.01
+                        diff = abs(running_balance - file_balance_val)
+                        balance_ok_val = diff < Decimal("0.02")
+                        if not balance_ok_val and first_balance_divergence_row is None:
+                            first_balance_divergence_row = idx + 1
+
             original_currency = account.currency
 
             # Extrair card_payment_date (se mapeado)
@@ -173,6 +243,51 @@ async def analyze_import(
                 cpd_str = row.get(mapping.card_payment_date_column)
                 if cpd_str:
                     card_payment_date = service._parse_date(cpd_str)
+            # Override global do formulário tem prioridade
+            if data.card_payment_date:
+                card_payment_date = data.card_payment_date
+
+            # Detectar parcelas (coluna dedicada ou na descrição)
+            installment_number, installment_total = None, None
+            installment_str = row.get(mapping.installment_column) if mapping.installment_column else None
+
+            if installment_str and str(installment_str).strip():
+                installment_number, installment_total = detect_installment(str(installment_str))
+
+            if installment_number is None:
+                installment_number, installment_total = detect_installment(description)
+
+            # Se parcela veio da coluna dedicada, adicionar ao final da descrição
+            if installment_number is not None and installment_str and str(installment_str).strip():
+                existing_n, _ = detect_installment(description)
+                if existing_n is None:
+                    description = f"{description} {installment_number} de {installment_total}"
+
+            # Ajustar data para parcelas de cartão de crédito
+            original_date = trans_date
+            if account.is_credit_card and card_payment_date and installment_number is not None:
+                # Buscar parcela anterior para calcular data correta
+                import calendar
+                desc_base = get_installment_base_description(description)
+                prev = find_previous_installment(
+                    db, data.account_id, desc_base, installment_number, installment_total
+                )
+                if prev:
+                    prev_date = prev.date
+                    next_month = prev_date.month + 1
+                    next_year = prev_date.year
+                    if next_month > 12:
+                        next_month = 1
+                        next_year += 1
+                    try:
+                        trans_date = date_type(next_year, next_month, prev_date.day)
+                    except ValueError:
+                        last_day = calendar.monthrange(next_year, next_month)[1]
+                        trans_date = date_type(next_year, next_month, last_day)
+                else:
+                    trans_date = adjust_date_for_credit_card(trans_date, card_payment_date)
+
+            all_dates.append(trans_date)
 
             # Layer 1: Hash exato
             trans_hash = Transaction.generate_hash(
@@ -181,9 +296,40 @@ async def analyze_import(
                 card_payment_date=card_payment_date
             )
 
+            # Para duplicatas intra-arquivo: usar sufixo (transações legítimas distintas)
             if trans_hash in seen_hashes:
-                duplicate_count += 1
-                continue
+                suffix = 1
+                suffixed_hash = Transaction.generate_hash(
+                    data.account_id, trans_date, description,
+                    amount, original_currency, suffix,
+                    card_payment_date=card_payment_date
+                )
+                while suffixed_hash in seen_hashes:
+                    suffix += 1
+                    suffixed_hash = Transaction.generate_hash(
+                        data.account_id, trans_date, description,
+                        amount, original_currency, suffix,
+                        card_payment_date=card_payment_date
+                    )
+                # Verificar se hash com sufixo já existe no banco
+                existing_suffixed = db.query(Transaction).filter(
+                    Transaction.transaction_hash == suffixed_hash
+                ).first()
+                if existing_suffixed:
+                    duplicate_count += 1
+                    seen_hashes.add(suffixed_hash)
+                    transactions_preview.append(TransactionPreviewRow(
+                        row=idx + 1, date=trans_date.isoformat(),
+                        description=description, amount=amount,
+                        status="duplicate", is_installment=installment_number is not None,
+                        adjusted_date=trans_date.isoformat() if trans_date != original_date else None,
+                        running_balance=running_balance,
+                        file_balance=file_balance_val,
+                        balance_ok=balance_ok_val,
+                    ))
+                    continue
+                else:
+                    trans_hash = suffixed_hash
 
             existing = db.query(Transaction).filter(
                 Transaction.transaction_hash == trans_hash
@@ -192,9 +338,19 @@ async def analyze_import(
             if existing:
                 duplicate_count += 1
                 seen_hashes.add(trans_hash)
+                transactions_preview.append(TransactionPreviewRow(
+                    row=idx + 1, date=trans_date.isoformat(),
+                    description=description, amount=amount,
+                    status="duplicate", is_installment=installment_number is not None,
+                    adjusted_date=trans_date.isoformat() if trans_date != original_date else None,
+                    running_balance=running_balance,
+                    file_balance=file_balance_val,
+                    balance_ok=balance_ok_val,
+                ))
                 continue
 
             # Layer 2: Fuzzy matching
+            row_status = "new"
             fuzzy_match = find_near_duplicate(
                 db, data.account_id, trans_date,
                 amount, original_currency, description,
@@ -209,8 +365,10 @@ async def analyze_import(
 
                 if similarity >= 0.85:
                     fuzzy_duplicate_count += 1
+                    row_status = "duplicate"
                 elif similarity >= 0.65:
                     uncertain_count += 1
+                    row_status = "uncertain"
                     uncertain_rows.append(UncertainRow(
                         row=idx + 1,
                         date=trans_date.isoformat(),
@@ -224,6 +382,20 @@ async def analyze_import(
                     new_count += 1
             else:
                 new_count += 1
+
+            # Rastrear amounts para validação de saldo (apenas novas)
+            if row_status == "new":
+                all_new_amounts.append(amount)
+
+            transactions_preview.append(TransactionPreviewRow(
+                row=idx + 1, date=trans_date.isoformat(),
+                description=description, amount=amount,
+                status=row_status, is_installment=installment_number is not None,
+                adjusted_date=trans_date.isoformat() if trans_date != original_date else None,
+                running_balance=running_balance,
+                file_balance=file_balance_val,
+                balance_ok=balance_ok_val,
+            ))
 
             seen_hashes.add(trans_hash)
 
@@ -247,6 +419,13 @@ async def analyze_import(
                 f"{date_start.strftime('%d/%m/%Y')} e {date_end.strftime('%d/%m/%Y')} nesta conta"
             )
 
+    # Calcular totais para validação de saldo
+    calculated_total = sum(all_new_amounts, Decimal("0.00")) if all_new_amounts else Decimal("0.00")
+    positive_amounts = [a for a in all_new_amounts if a > 0]
+    negative_amounts = [a for a in all_new_amounts if a < 0]
+    positive_total = sum(positive_amounts, Decimal("0.00"))
+    negative_total = sum(negative_amounts, Decimal("0.00"))
+
     return ImportAnalysis(
         batch_id=data.batch_id,
         total_rows=len(raw_data),
@@ -259,6 +438,14 @@ async def analyze_import(
         date_range_end=max(all_dates).isoformat() if all_dates else None,
         overlap_info=overlap_info,
         uncertain_rows=uncertain_rows[:20],
+        calculated_total=calculated_total,
+        positive_total=positive_total,
+        negative_total=negative_total,
+        positive_count=len(positive_amounts),
+        negative_count=len(negative_amounts),
+        running_balance_final=running_balance,
+        first_balance_divergence_row=first_balance_divergence_row,
+        transactions_preview=transactions_preview,
     )
 
 
@@ -376,7 +563,8 @@ def revert_batch(
     # Atualizar saldo da conta
     account = db.query(BankAccount).filter(BankAccount.id == batch.account_id).first()
     if account:
-        account.current_balance -= total
+        log_balance_change(db, account, account.current_balance - total,
+                           'revert_import', f'Reverted batch {batch_id} ({deleted} txns)')
 
     # Excluir batch
     db.delete(batch)
@@ -386,6 +574,46 @@ def revert_batch(
         "message": f"Importação revertida. {deleted} transações excluídas.",
         "deleted_count": deleted
     }
+
+
+@router.get("/templates/{account_id}")
+def get_import_template(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Retorna template de importação salvo para uma conta."""
+    import json
+    template = db.query(ImportTemplate).filter(
+        ImportTemplate.account_id == account_id
+    ).first()
+    if not template:
+        return None
+    return {
+        "id": template.id,
+        "account_id": template.account_id,
+        "column_mapping": json.loads(template.column_mapping),
+        "file_format_hints": json.loads(template.file_format_hints) if template.file_format_hints else None,
+        "last_used_at": template.last_used_at.isoformat() if template.last_used_at else None,
+        "success_count": template.success_count,
+    }
+
+
+@router.delete("/templates/{account_id}")
+def delete_import_template(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Exclui template de importação de uma conta."""
+    template = db.query(ImportTemplate).filter(
+        ImportTemplate.account_id == account_id
+    ).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template não encontrado")
+    db.delete(template)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/detect-columns")
@@ -913,7 +1141,8 @@ async def bulk_process(
                     imported += 1
 
                     # Atualizar saldo (usar original_amount, na moeda da conta)
-                    account.current_balance += original_amount
+                    log_balance_change(db, account, account.current_balance + original_amount,
+                                       'import', f'Historical import batch {batch.id}')
 
                 except Exception as e:
                     # Não fazer rollback aqui, apenas registrar o erro e continuar

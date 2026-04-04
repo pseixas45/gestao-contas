@@ -204,3 +204,38 @@ class ReportTransactionDetail(BaseModel):
     amount_brl: Decimal
     amount_usd: Decimal
     amount_eur: Decimal
+
+
+# --- Dashboard Summary ---
+
+class DashboardAccountBalance(BaseModel):
+    account_id: int
+    account_name: str
+    bank_name: str
+    bank_color: Optional[str] = None
+    currency: str
+    balance: Decimal
+    balance_brl: Decimal
+    account_type: str
+
+class DashboardTopCategory(BaseModel):
+    category_id: int
+    category_name: str
+    category_color: Optional[str] = None
+    amount: Decimal
+    percentage: float
+
+class DashboardMonthEvolution(BaseModel):
+    month: str
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+
+class DashboardSummary(BaseModel):
+    total_balance_brl: Decimal
+    month_income: Decimal
+    month_expenses: Decimal
+    pending_count: int
+    accounts: List[DashboardAccountBalance]
+    top_categories: List[DashboardTopCategory]
+    monthly_evolution: List[DashboardMonthEvolution]

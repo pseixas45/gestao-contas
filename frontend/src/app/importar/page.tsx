@@ -8,12 +8,27 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
+import Badge from '@/components/ui/Badge';
 import { importsApi, accountsApi } from '@/lib/api';
-import { formatCurrency, getImportStatusLabel, getImportStatusColor } from '@/lib/utils';
-import { Upload, CheckCircle, AlertCircle, Trash2, Search, ArrowRight } from 'lucide-react';
+import { formatCurrency, formatDate, getImportStatusLabel, getImportStatusColor } from '@/lib/utils';
+import {
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  AlertTriangle,
+  Trash2,
+  ArrowRight,
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  FileSpreadsheet,
+  Settings2,
+  RotateCcw,
+  X,
+} from 'lucide-react';
 import type { ImportPreview, ImportResult, ImportAnalysis, ColumnMapping } from '@/types';
 
-type Step = 'upload' | 'mapping' | 'analysis' | 'result';
+type Step = 'upload' | 'analysis' | 'result';
 
 export default function ImportarPage() {
   const [step, setStep] = useState<Step>('upload');
@@ -22,70 +37,93 @@ export default function ImportarPage() {
   const [columnMapping, setColumnMapping] = useState<ColumnMapping | null>(null);
   const [analysis, setAnalysis] = useState<ImportAnalysis | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
-  const [validateBalance, setValidateBalance] = useState(false);
+  const [validateBalance, setValidateBalance] = useState(true);
   const [expectedBalance, setExpectedBalance] = useState('');
   const [deletingBatchId, setDeletingBatchId] = useState<number | null>(null);
-  const [skippedUncertain, setSkippedUncertain] = useState<Set<number>>(new Set());
+  const [cardPaymentDate, setCardPaymentDate] = useState('');
+  const [showMapping, setShowMapping] = useState(false);
+  const [showTransactions, setShowTransactions] = useState(false);
 
   const queryClient = useQueryClient();
 
-  // Buscar contas
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts'],
     queryFn: () => accountsApi.list(),
   });
 
-  // Buscar histórico de importações
   const { data: batches = [] } = useQuery({
     queryKey: ['import-batches'],
     queryFn: () => importsApi.listBatches(),
   });
 
-  // Upload mutation
+  const selectedAccountObj = accounts.find((a) => a.id === parseInt(selectedAccount));
+  const isCreditCard = selectedAccountObj?.account_type === 'credit_card';
+
+  // Upload → detect/template → auto-analyze
   const uploadMutation = useMutation({
     mutationFn: (file: File) => importsApi.upload(file, parseInt(selectedAccount)),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setPreview(data);
       setColumnMapping(data.detected_mapping);
-      setStep('mapping');
+
+      // If has template, auto-analyze immediately
+      if (data.has_template) {
+        try {
+          const analysisResult = await importsApi.analyze({
+            batch_id: data.batch_id,
+            column_mapping: data.detected_mapping,
+            account_id: parseInt(selectedAccount),
+            card_payment_date: cardPaymentDate || undefined,
+          });
+          setAnalysis(analysisResult);
+          setStep('analysis');
+        } catch {
+          // Template mapping failed, show mapping panel
+          setShowMapping(true);
+          setStep('analysis');
+        }
+      } else {
+        // No template, show mapping
+        setShowMapping(true);
+        setStep('analysis');
+      }
     },
   });
 
-  // Analyze mutation (dry-run)
   const analyzeMutation = useMutation({
     mutationFn: () =>
       importsApi.analyze({
         batch_id: preview!.batch_id,
         column_mapping: columnMapping!,
         account_id: parseInt(selectedAccount),
+        card_payment_date: cardPaymentDate || undefined,
       }),
     onSuccess: (data) => {
       setAnalysis(data);
-      setSkippedUncertain(new Set());
-      setStep('analysis');
+      setShowMapping(false);
     },
   });
 
-  // Process mutation
   const processMutation = useMutation({
     mutationFn: () =>
       importsApi.process({
         batch_id: preview!.batch_id,
         column_mapping: columnMapping!,
         account_id: parseInt(selectedAccount),
-        validate_balance: validateBalance,
-        expected_final_balance: validateBalance ? parseFloat(expectedBalance) : undefined,
+        validate_balance: validateBalance && !!expectedBalance,
+        expected_final_balance: validateBalance && expectedBalance ? parseFloat(expectedBalance) : undefined,
         skip_duplicates: true,
+        card_payment_date: cardPaymentDate || undefined,
       }),
     onSuccess: (data) => {
       setResult(data);
       setStep('result');
       queryClient.invalidateQueries({ queryKey: ['import-batches'] });
       queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
   });
 
-  // Revert batch mutation
   const revertMutation = useMutation({
     mutationFn: (batchId: number) => importsApi.revertBatch(batchId),
     onSuccess: () => {
@@ -95,7 +133,6 @@ export default function ImportarPage() {
     },
   });
 
-  // Dropzone
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       if (acceptedFiles.length > 0 && selectedAccount) {
@@ -110,7 +147,7 @@ export default function ImportarPage() {
     accept: {
       'text/csv': ['.csv'],
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/pdf': ['.pdf'],
+      'application/vnd.ms-excel': ['.xls'],
     },
     maxFiles: 1,
     disabled: !selectedAccount,
@@ -122,667 +159,669 @@ export default function ImportarPage() {
     setColumnMapping(null);
     setAnalysis(null);
     setResult(null);
-    setSkippedUncertain(new Set());
+    setShowMapping(false);
+    setShowTransactions(false);
+    setExpectedBalance('');
+    setCardPaymentDate('');
   };
 
-  const toggleUncertain = (row: number) => {
-    setSkippedUncertain((prev) => {
-      const next = new Set(prev);
-      if (next.has(row)) {
-        next.delete(row);
-      } else {
-        next.add(row);
-      }
-      return next;
-    });
+  const updateMapping = (field: keyof ColumnMapping, value: string) => {
+    if (columnMapping) {
+      setColumnMapping({ ...columnMapping, [field]: value || null });
+    }
   };
 
-  const stepLabels = ['Upload', 'Mapeamento', 'Análise', 'Resultado'];
-  const stepKeys: Step[] = ['upload', 'mapping', 'analysis', 'result'];
+  const columnOptions = preview ? [{ value: '', label: 'Nao mapear' }, ...preview.columns.map((c) => ({ value: c, label: c }))] : [];
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* Cabeçalho */}
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">Importar Extrato</h1>
-          <p className="text-gray-600">Importe extratos em CSV, Excel ou PDF</p>
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Importar Extrato</h1>
+            <p className="text-slate-500">Carregue extratos bancarios em CSV ou Excel</p>
+          </div>
+          {step !== 'upload' && (
+            <Button variant="secondary" size="sm" onClick={resetImport}>
+              <RotateCcw className="h-4 w-4 mr-1.5" />
+              Nova importacao
+            </Button>
+          )}
         </div>
 
-        {/* Steps */}
-        <div className="flex items-center gap-4 mb-8">
-          {stepKeys.map((s, i) => (
-            <div key={s} className="flex items-center">
-              <div className="flex flex-col items-center">
+        {/* Steps indicator */}
+        <div className="flex items-center gap-3">
+          {[
+            { key: 'upload', label: '1. Upload' },
+            { key: 'analysis', label: '2. Analise' },
+            { key: 'result', label: '3. Resultado' },
+          ].map(({ key, label }, i) => {
+            const isActive = step === key;
+            const isDone =
+              (key === 'upload' && step !== 'upload') ||
+              (key === 'analysis' && step === 'result');
+            return (
+              <div key={key} className="flex items-center gap-2">
+                {i > 0 && <div className="w-8 h-px bg-slate-200" />}
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                    step === s
-                      ? 'bg-primary-600 text-white'
-                      : stepKeys.indexOf(step) > i
-                      ? 'bg-green-500 text-white'
-                      : 'bg-gray-200 text-gray-500'
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-primary-50 text-primary-700'
+                      : isDone
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'text-slate-400'
                   }`}
                 >
-                  {i + 1}
+                  {isDone && <CheckCircle className="h-3.5 w-3.5" />}
+                  {label}
                 </div>
-                <span className="text-xs text-gray-500 mt-1">{stepLabels[i]}</span>
               </div>
-              {i < 3 && <div className="w-12 h-0.5 bg-gray-200 mx-2 mb-5" />}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Step 1: Upload */}
         {step === 'upload' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>1. Selecione a conta e o arquivo</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <Select
-                label="Conta de destino"
-                value={selectedAccount}
-                onChange={(e) => setSelectedAccount(e.target.value)}
-                options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.bank_name})` }))}
-                placeholder="Selecione a conta"
-              />
-
-              <div
-                {...getRootProps()}
-                className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
-                  isDragActive
-                    ? 'border-primary-500 bg-primary-50'
-                    : selectedAccount
-                    ? 'border-gray-300 hover:border-primary-400'
-                    : 'border-gray-200 bg-gray-50 cursor-not-allowed'
-                }`}
-              >
-                <input {...getInputProps()} />
-                <Upload className="mx-auto text-gray-400 mb-4" size={48} />
-                {isDragActive ? (
-                  <p className="text-primary-600">Solte o arquivo aqui...</p>
-                ) : (
-                  <>
-                    <p className="text-gray-600 mb-2">
-                      {selectedAccount
-                        ? 'Arraste um arquivo ou clique para selecionar'
-                        : 'Selecione uma conta primeiro'}
-                    </p>
-                    <p className="text-sm text-gray-400">CSV, Excel (.xlsx) ou PDF</p>
-                  </>
-                )}
-              </div>
-
-              {uploadMutation.isPending && (
-                <div className="text-center text-primary-600">Processando arquivo...</div>
-              )}
-
-              {uploadMutation.isError && (
-                <div className="text-center text-red-500">
-                  Erro ao processar arquivo. Verifique o formato.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Step 2: Mapping */}
-        {step === 'mapping' && preview && columnMapping && (
-          <Card>
-            <CardHeader>
-              <CardTitle>2. Mapeamento de colunas</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <p className="text-gray-600">
-                {preview.total_rows} linhas encontradas. Verifique se as colunas foram detectadas corretamente.
-              </p>
-
-              {/* Preview dos dados */}
-              <div className="overflow-x-auto border rounded-lg">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Data</th>
-                      <th className="px-4 py-2 text-left">Descrição</th>
-                      {columnMapping.valor_brl_column && (
-                        <th className="px-4 py-2 text-right">R$</th>
-                      )}
-                      {columnMapping.valor_usd_column && (
-                        <th className="px-4 py-2 text-right">US$</th>
-                      )}
-                      {columnMapping.valor_eur_column && (
-                        <th className="px-4 py-2 text-right">EUR</th>
-                      )}
-                      {!columnMapping.valor_brl_column && !columnMapping.valor_usd_column && !columnMapping.valor_eur_column && columnMapping.amount_column && (
-                        <th className="px-4 py-2 text-right">Valor</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.preview_rows.slice(0, 5).map((row, i) => (
-                      <tr key={i} className="border-t">
-                        <td className="px-4 py-2">{row[columnMapping.date_column]}</td>
-                        <td className="px-4 py-2">{row[columnMapping.description_column]}</td>
-                        {columnMapping.valor_brl_column && (
-                          <td className="px-4 py-2 text-right">{row[columnMapping.valor_brl_column]}</td>
-                        )}
-                        {columnMapping.valor_usd_column && (
-                          <td className="px-4 py-2 text-right">{row[columnMapping.valor_usd_column]}</td>
-                        )}
-                        {columnMapping.valor_eur_column && (
-                          <td className="px-4 py-2 text-right">{row[columnMapping.valor_eur_column]}</td>
-                        )}
-                        {!columnMapping.valor_brl_column && !columnMapping.valor_usd_column && !columnMapping.valor_eur_column && columnMapping.amount_column && (
-                          <td className="px-4 py-2 text-right">{row[columnMapping.amount_column]}</td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Colunas obrigatórias */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-3">Colunas Obrigatórias</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Select
-                    label="Coluna de Data"
-                    value={columnMapping.date_column}
-                    onChange={(e) =>
-                      setColumnMapping({ ...columnMapping, date_column: e.target.value })
-                    }
-                    options={preview.columns.map((c) => ({ value: c, label: c }))}
-                  />
-
-                  <Select
-                    label="Coluna de Descrição"
-                    value={columnMapping.description_column}
-                    onChange={(e) =>
-                      setColumnMapping({ ...columnMapping, description_column: e.target.value })
-                    }
-                    options={preview.columns.map((c) => ({ value: c, label: c }))}
-                  />
-                </div>
-              </div>
-
-              {/* Colunas de Valor Multi-moeda */}
-              <div className="p-4 bg-blue-50 rounded-lg">
-                <h3 className="text-sm font-medium text-blue-800 mb-3">Colunas de Valor (Multi-moeda)</h3>
-                <p className="text-xs text-blue-600 mb-3">
-                  Selecione as colunas de valor para cada moeda. Pelo menos uma deve ser preenchida.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <Select
-                    label="Valor em R$ (BRL)"
-                    value={columnMapping.valor_brl_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        valor_brl_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-
-                  <Select
-                    label="Valor em US$ (USD)"
-                    value={columnMapping.valor_usd_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        valor_usd_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-
-                  <Select
-                    label="Valor em EUR"
-                    value={columnMapping.valor_eur_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        valor_eur_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-                </div>
-
-                {/* Campo de valor genérico como fallback */}
-                <div className="mt-4 pt-4 border-t border-blue-200">
-                  <Select
-                    label="Ou Coluna de Valor Genérico (se não houver colunas separadas por moeda)"
-                    value={columnMapping.amount_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({ ...columnMapping, amount_column: e.target.value || null })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-                </div>
-              </div>
-
-              {/* Colunas opcionais */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-700 mb-3">Colunas Opcionais</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Select
-                    label="Coluna de Categoria"
-                    value={columnMapping.category_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        category_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-
-                  <Select
-                    label="Coluna de Saldo"
-                    value={columnMapping.balance_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        balance_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-
-                  <Select
-                    label="Data Pagamento Cartão (para ajuste de fatura)"
-                    value={columnMapping.card_payment_date_column || ''}
-                    onChange={(e) =>
-                      setColumnMapping({
-                        ...columnMapping,
-                        card_payment_date_column: e.target.value || null,
-                      })
-                    }
-                    options={[
-                      { value: '', label: 'Não disponível' },
-                      ...preview.columns.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-4">
-                <Button variant="secondary" onClick={resetImport}>
-                  Voltar
-                </Button>
-                <Button
-                  onClick={() => analyzeMutation.mutate()}
-                  isLoading={analyzeMutation.isPending}
-                >
-                  <Search size={16} className="mr-2" />
-                  Analisar
-                </Button>
-              </div>
-
-              {analyzeMutation.isError && (
-                <div className="p-4 bg-red-50 text-red-700 rounded-lg">
-                  Erro ao analisar arquivo. Verifique o mapeamento de colunas.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Step 3: Analysis */}
-        {step === 'analysis' && analysis && (
-          <Card>
-            <CardHeader>
-              <CardTitle>3. Análise de duplicados</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Overlap warning */}
-              {analysis.overlap_info && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3">
-                  <AlertCircle className="text-amber-500 flex-shrink-0 mt-0.5" size={20} />
-                  <div>
-                    <p className="font-medium text-amber-800">Sobreposição detectada</p>
-                    <p className="text-sm text-amber-700">{analysis.overlap_info}</p>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-4">
+              <Card>
+                <CardContent className="pt-6">
+                  {/* Account selection */}
+                  <div className="mb-5">
+                    <Select
+                      label="Conta destino"
+                      value={selectedAccount}
+                      onChange={(e) => setSelectedAccount(e.target.value)}
+                      options={[
+                        { value: '', label: 'Selecione uma conta...' },
+                        ...accounts.map((a) => ({
+                          value: a.id.toString(),
+                          label: `${a.name} (${a.bank_name}) - ${a.currency}`,
+                        })),
+                      ]}
+                    />
                   </div>
-                </div>
-              )}
 
-              {/* Date range */}
-              {analysis.date_range_start && analysis.date_range_end && (
-                <p className="text-sm text-gray-500">
-                  Período do arquivo: {new Date(analysis.date_range_start + 'T12:00:00').toLocaleDateString('pt-BR')} a {new Date(analysis.date_range_end + 'T12:00:00').toLocaleDateString('pt-BR')}
-                </p>
-              )}
+                  {/* Credit card date */}
+                  {isCreditCard && (
+                    <div className="mb-5">
+                      <Input
+                        label="Data de pagamento da fatura"
+                        type="date"
+                        value={cardPaymentDate}
+                        onChange={(e) => setCardPaymentDate(e.target.value)}
+                        hint="Obrigatorio para cartao de credito (ajusta datas das parcelas)"
+                      />
+                    </div>
+                  )}
 
-              {/* Summary cards */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div className="p-4 bg-green-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-green-600">{analysis.new_count}</p>
-                  <p className="text-sm text-gray-500">Novas</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-gray-400">{analysis.duplicate_count}</p>
-                  <p className="text-sm text-gray-500">Duplicatas exatas</p>
-                </div>
-                <div className="p-4 bg-blue-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-blue-500">{analysis.fuzzy_duplicate_count}</p>
-                  <p className="text-sm text-gray-500">Duplicatas similares</p>
-                </div>
-                <div className="p-4 bg-amber-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-amber-500">{analysis.uncertain_count}</p>
-                  <p className="text-sm text-gray-500">Incertas</p>
-                </div>
-                <div className="p-4 bg-red-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-red-500">{analysis.error_count}</p>
-                  <p className="text-sm text-gray-500">Erros</p>
-                </div>
-              </div>
-
-              {/* Total summary */}
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <p className="text-sm text-gray-600">
-                  <strong>{analysis.total_rows}</strong> linhas no arquivo.{' '}
-                  <strong className="text-green-600">{analysis.new_count}</strong> transações novas serão importadas.{' '}
-                  <strong className="text-gray-400">{analysis.duplicate_count + analysis.fuzzy_duplicate_count}</strong> duplicatas serão ignoradas.
-                </p>
-              </div>
-
-              {/* Uncertain rows review */}
-              {analysis.uncertain_rows.length > 0 && (
-                <div className="border border-amber-200 rounded-lg">
-                  <div className="p-4 bg-amber-50 border-b border-amber-200">
-                    <h4 className="font-medium text-amber-800">
-                      Transações incertas ({analysis.uncertain_rows.length})
-                    </h4>
-                    <p className="text-sm text-amber-600 mt-1">
-                      Estas transações são parecidas com existentes mas não temos certeza se são duplicatas.
-                      Marque as que deseja pular.
-                    </p>
-                  </div>
-                  <div className="divide-y">
-                    {analysis.uncertain_rows.map((row) => (
-                      <div
-                        key={row.row}
-                        className={`p-4 flex items-center gap-4 ${
-                          skippedUncertain.has(row.row) ? 'bg-gray-50 opacity-60' : ''
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={skippedUncertain.has(row.row)}
-                          onChange={() => toggleUncertain(row.row)}
-                          className="rounded flex-shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-sm font-medium">{row.date}</span>
-                            <span className="text-sm text-gray-700 truncate">{row.description}</span>
-                            <span className={`text-sm font-medium ${row.amount < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {formatCurrency(row.amount)}
-                            </span>
+                  {/* Dropzone */}
+                  <div
+                    {...getRootProps()}
+                    className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
+                      !selectedAccount
+                        ? 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed'
+                        : isDragActive
+                          ? 'border-primary-400 bg-primary-50'
+                          : 'border-slate-300 hover:border-primary-400 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input {...getInputProps()} />
+                    <div className="flex flex-col items-center gap-3">
+                      {uploadMutation.isPending ? (
+                        <>
+                          <div className="w-10 h-10 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+                          <p className="text-sm text-slate-500">Processando arquivo...</p>
+                        </>
+                      ) : (
+                        <>
+                          <div className="w-14 h-14 rounded-2xl bg-primary-50 flex items-center justify-center">
+                            <Upload className="h-6 w-6 text-primary-600" />
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-gray-500">
-                            <span>Similar a:</span>
-                            <span className="text-gray-600">&quot;{row.similar_to_description}&quot;</span>
-                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">
-                              {Math.round(row.similarity * 100)}% similar
+                          <div>
+                            <p className="text-sm font-medium text-slate-700">
+                              {isDragActive ? 'Solte o arquivo aqui' : 'Arraste um arquivo ou clique para selecionar'}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-1">CSV, Excel (.xlsx, .xls)</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {uploadMutation.isError && (
+                    <div className="mt-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-sm text-rose-700">
+                      <AlertCircle className="inline h-4 w-4 mr-1.5" />
+                      {(uploadMutation.error as any)?.response?.data?.detail || 'Erro ao fazer upload'}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Import history */}
+            <div>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Historico</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {batches.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-4">Nenhuma importacao</p>
+                  ) : (
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {batches.slice(0, 15).map((batch) => (
+                        <div key={batch.id} className="p-2.5 rounded-lg bg-slate-50 text-sm">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-medium text-slate-700 truncate max-w-[160px]">
+                              {batch.filename}
+                            </span>
+                            <button
+                              onClick={() => setDeletingBatchId(batch.id)}
+                              className="text-slate-400 hover:text-rose-500 p-0.5"
+                              title="Reverter"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-slate-400">
+                            <span>{batch.imported_records} importadas</span>
+                            {batch.duplicate_records > 0 && (
+                              <span>| {batch.duplicate_records} dup</span>
+                            )}
+                            <span className={`ml-auto px-1.5 py-0.5 rounded text-xs ${getImportStatusColor(batch.status)}`}>
+                              {getImportStatusLabel(batch.status)}
                             </span>
                           </div>
                         </div>
-                        <span className="text-xs text-gray-400 flex-shrink-0">
-                          {skippedUncertain.has(row.row) ? 'Pular' : 'Importar'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Balance validation */}
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <label className="flex items-center gap-2 mb-4">
-                  <input
-                    type="checkbox"
-                    checked={validateBalance}
-                    onChange={(e) => setValidateBalance(e.target.checked)}
-                    className="rounded"
-                  />
-                  <span>Validar saldo final</span>
-                </label>
-
-                {validateBalance && (
-                  <Input
-                    label="Saldo esperado após importação"
-                    type="number"
-                    step="0.01"
-                    value={expectedBalance}
-                    onChange={(e) => setExpectedBalance(e.target.value)}
-                    placeholder="0.00"
-                  />
-                )}
-              </div>
-
-              <div className="flex gap-4">
-                <Button variant="secondary" onClick={() => setStep('mapping')}>
-                  Voltar
-                </Button>
-                <Button
-                  onClick={() => processMutation.mutate()}
-                  isLoading={processMutation.isPending}
-                  disabled={analysis.new_count === 0 && analysis.uncertain_count === 0}
-                >
-                  <ArrowRight size={16} className="mr-2" />
-                  Importar {analysis.new_count + analysis.uncertain_count - skippedUncertain.size} transações
-                </Button>
-              </div>
-
-              {processMutation.isError && (
-                <div className="p-4 bg-red-50 text-red-700 rounded-lg">
-                  Erro ao importar. Tente novamente.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Step 4: Result */}
-        {step === 'result' && result && (
-          <Card>
-            <CardHeader>
-              <CardTitle>4. Resultado da importação</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div
-                className={`p-6 rounded-lg text-center ${
-                  result.success ? 'bg-green-50' : 'bg-red-50'
-                }`}
-              >
-                {result.success ? (
-                  <CheckCircle className="mx-auto text-green-500 mb-4" size={48} />
-                ) : (
-                  <AlertCircle className="mx-auto text-red-500 mb-4" size={48} />
-                )}
-                <h3 className="text-lg font-medium mb-2">
-                  {result.success ? 'Importação concluída!' : 'Importação com problemas'}
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-gray-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-green-600">{result.imported_count}</p>
-                  <p className="text-sm text-gray-500">Importadas</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-orange-600">{result.duplicate_count}</p>
-                  <p className="text-sm text-gray-500">Duplicatas</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-red-600">{result.error_count}</p>
-                  <p className="text-sm text-gray-500">Erros</p>
-                </div>
-                {result.balance_validated && (
-                  <div className="p-4 bg-gray-50 rounded-lg text-center">
-                    <p
-                      className={`text-2xl font-bold ${
-                        result.balance_matches ? 'text-green-600' : 'text-red-600'
-                      }`}
-                    >
-                      {result.balance_matches ? 'OK' : formatCurrency(result.balance_difference || 0)}
-                    </p>
-                    <p className="text-sm text-gray-500">Saldo</p>
-                  </div>
-                )}
-              </div>
-
-              {result.errors.length > 0 && (
-                <div className="p-4 bg-red-50 rounded-lg">
-                  <h4 className="font-medium text-red-800 mb-2">Erros encontrados:</h4>
-                  <ul className="text-sm text-red-600 space-y-1">
-                    {result.errors.map((err, i) => (
-                      <li key={i}>
-                        Linha {err.row}: {err.message}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {result.duplicates.length > 0 && (
-                <div className="p-4 bg-orange-50 rounded-lg">
-                  <h4 className="font-medium text-orange-800 mb-2">
-                    Duplicatas ignoradas ({result.duplicate_count}):
-                  </h4>
-                  <ul className="text-sm text-orange-600 space-y-1">
-                    {result.duplicates.slice(0, 5).map((dup, i) => (
-                      <li key={i}>
-                        {dup.date} - {dup.description} ({formatCurrency(dup.amount)})
-                      </li>
-                    ))}
-                    {result.duplicates.length > 5 && (
-                      <li>... e mais {result.duplicates.length - 5}</li>
-                    )}
-                  </ul>
-                </div>
-              )}
-
-              <Button onClick={resetImport}>Nova importação</Button>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Histórico de Importações */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Histórico de Importações</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {batches.length === 0 ? (
-              <p className="text-center py-8 text-gray-500">Nenhuma importação realizada</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left">Arquivo</th>
-                      <th className="px-6 py-3 text-left">Tipo</th>
-                      <th className="px-6 py-3 text-center">Registros</th>
-                      <th className="px-6 py-3 text-center">Status</th>
-                      <th className="px-6 py-3 text-left">Data</th>
-                      <th className="px-6 py-3 text-center">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {batches.slice(0, 10).map((batch) => (
-                      <tr key={batch.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">{batch.filename}</td>
-                        <td className="px-6 py-4 uppercase">{batch.file_type}</td>
-                        <td className="px-6 py-4 text-center">
-                          {batch.imported_records}/{batch.total_records}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs ${getImportStatusColor(
-                              batch.status
-                            )}`}
-                          >
-                            {getImportStatusLabel(batch.status)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-gray-500">
-                          {new Date(batch.imported_at).toLocaleString('pt-BR')}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <button
-                            onClick={() => setDeletingBatchId(batch.id)}
-                            className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"
-                            title="Excluir importação"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Modal de confirmação de exclusão */}
-        {deletingBatchId && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Confirmar exclusão</h3>
-              <p className="text-gray-600 mb-1">
-                Tem certeza que deseja excluir esta importação?
-              </p>
-              <p className="text-sm text-red-600 mb-6">
-                Todas as transações deste lote serão removidas e o saldo da conta será ajustado.
-              </p>
-              {revertMutation.isError && (
-                <div className="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
-                  Erro ao excluir importação. Tente novamente.
-                </div>
-              )}
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => { setDeletingBatchId(null); revertMutation.reset(); }}
-                  className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium"
-                  disabled={revertMutation.isPending}
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={() => revertMutation.mutate(deletingBatchId)}
-                  disabled={revertMutation.isPending}
-                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
-                >
-                  {revertMutation.isPending ? 'Excluindo...' : 'Excluir'}
-                </button>
-              </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
         )}
+
+        {/* Step 2: Analysis (+ optional mapping) */}
+        {step === 'analysis' && preview && columnMapping && (
+          <div className="space-y-4">
+            {/* Mapping panel (collapsible) */}
+            <Card>
+              <CardHeader>
+                <button
+                  onClick={() => setShowMapping(!showMapping)}
+                  className="flex items-center justify-between w-full"
+                >
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-4 w-4 text-slate-400" />
+                    <CardTitle>Mapeamento de Colunas</CardTitle>
+                    {preview.has_template && !showMapping && (
+                      <Badge color="primary" variant="soft" size="sm">Template salvo</Badge>
+                    )}
+                  </div>
+                  {showMapping ? (
+                    <ChevronUp className="h-4 w-4 text-slate-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-slate-400" />
+                  )}
+                </button>
+              </CardHeader>
+              {showMapping && (
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <Select
+                      label="Data *"
+                      value={columnMapping.date_column}
+                      onChange={(e) => updateMapping('date_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Descricao *"
+                      value={columnMapping.description_column}
+                      onChange={(e) => updateMapping('description_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Valor"
+                      value={columnMapping.amount_column || ''}
+                      onChange={(e) => updateMapping('amount_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Valor R$"
+                      value={columnMapping.valor_brl_column || ''}
+                      onChange={(e) => updateMapping('valor_brl_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Valor US$"
+                      value={columnMapping.valor_usd_column || ''}
+                      onChange={(e) => updateMapping('valor_usd_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Valor EUR"
+                      value={columnMapping.valor_eur_column || ''}
+                      onChange={(e) => updateMapping('valor_eur_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Saldo"
+                      value={columnMapping.balance_column || ''}
+                      onChange={(e) => updateMapping('balance_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    <Select
+                      label="Categoria"
+                      value={columnMapping.category_column || ''}
+                      onChange={(e) => updateMapping('category_column', e.target.value)}
+                      options={columnOptions}
+                    />
+                    {isCreditCard && (
+                      <Select
+                        label="Data Pagamento"
+                        value={columnMapping.card_payment_date_column || ''}
+                        onChange={(e) => updateMapping('card_payment_date_column', e.target.value)}
+                        options={columnOptions}
+                      />
+                    )}
+                  </div>
+
+                  {/* Preview rows */}
+                  {preview.preview_rows.length > 0 && (
+                    <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            {preview.columns.map((col) => (
+                              <th key={col} className="px-3 py-2 text-left font-medium text-slate-500">
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.preview_rows.slice(0, 5).map((row, i) => (
+                            <tr key={i} className="border-t border-slate-100">
+                              {preview.columns.map((col) => (
+                                <td key={col} className="px-3 py-1.5 text-slate-600 whitespace-nowrap">
+                                  {String(row[col] ?? '')}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex justify-end">
+                    <Button
+                      onClick={() => analyzeMutation.mutate()}
+                      disabled={analyzeMutation.isPending || !columnMapping.date_column || !columnMapping.description_column}
+                      isLoading={analyzeMutation.isPending}
+                    >
+                      Analisar
+                    </Button>
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+
+            {/* Analysis results */}
+            {analysis && (
+              <>
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="p-3 bg-emerald-50 rounded-xl text-center">
+                    <p className="text-2xl font-bold text-emerald-700">{analysis.new_count}</p>
+                    <p className="text-xs text-emerald-600">Novas</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-xl text-center">
+                    <p className="text-2xl font-bold text-slate-500">{analysis.duplicate_count + analysis.fuzzy_duplicate_count}</p>
+                    <p className="text-xs text-slate-400">Duplicadas</p>
+                  </div>
+                  <div className="p-3 bg-amber-50 rounded-xl text-center">
+                    <p className="text-2xl font-bold text-amber-600">{analysis.uncertain_count}</p>
+                    <p className="text-xs text-amber-500">Incertas</p>
+                  </div>
+                  <div className="p-3 bg-rose-50 rounded-xl text-center">
+                    <p className="text-2xl font-bold text-rose-600">{analysis.error_count}</p>
+                    <p className="text-xs text-rose-500">Erros</p>
+                  </div>
+                  <div className="p-3 bg-primary-50 rounded-xl text-center">
+                    <p className="text-2xl font-bold text-primary-700">{analysis.total_rows}</p>
+                    <p className="text-xs text-primary-500">Total</p>
+                  </div>
+                </div>
+
+                {/* Balance validation */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Validacao de Saldo</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      <div className="p-3 rounded-xl bg-slate-50">
+                        <p className="text-xs text-slate-400 mb-0.5">Soma das transacoes</p>
+                        <p className="text-lg font-bold text-slate-900 tabular-nums">
+                          {formatCurrency(analysis.calculated_total || 0)}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {analysis.positive_count} creditos ({formatCurrency(analysis.positive_total || 0)})
+                          {' / '}
+                          {analysis.negative_count} debitos ({formatCurrency(analysis.negative_total || 0)})
+                        </p>
+                      </div>
+                      <div className="p-3 rounded-xl bg-slate-50">
+                        <p className="text-xs text-slate-400 mb-0.5">Saldo esperado (informe)</p>
+                        <Input
+                          type="text"
+                          placeholder="Ex: -1709.62"
+                          value={expectedBalance}
+                          onChange={(e) => setExpectedBalance(e.target.value)}
+                        />
+                      </div>
+                      {expectedBalance && (
+                        <div className="p-3 rounded-xl bg-slate-50">
+                          <p className="text-xs text-slate-400 mb-0.5">Diferenca</p>
+                          {(() => {
+                            const diff = (analysis.calculated_total || 0) - parseFloat(expectedBalance);
+                            const isOk = Math.abs(diff) < 0.02;
+                            return (
+                              <>
+                                <p className={`text-lg font-bold tabular-nums ${isOk ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  {formatCurrency(diff)}
+                                </p>
+                                <p className={`text-xs mt-1 ${isOk ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                  {isOk ? 'Saldo confere!' : 'Saldo divergente'}
+                                </p>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Running balance divergence alert */}
+                    {analysis.first_balance_divergence_row && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+                        <AlertTriangle className="inline h-4 w-4 mr-1.5" />
+                        Saldo diverge na linha {analysis.first_balance_divergence_row} (comparando saldo do arquivo com saldo calculado)
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Uncertain transactions */}
+                {analysis.uncertain_rows.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>
+                        <AlertTriangle className="inline h-4 w-4 text-amber-500 mr-1.5" />
+                        Transacoes Incertas ({analysis.uncertain_rows.length})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        {analysis.uncertain_rows.map((row) => (
+                          <div key={row.row} className="p-3 rounded-lg bg-amber-50/50 border border-amber-100 text-sm">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-medium text-slate-700">
+                                Linha {row.row}: {row.description}
+                              </span>
+                              <Badge color="amber" variant="soft" size="sm">
+                                {Math.round(row.similarity * 100)}% similar
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                              Similar a: &quot;{row.similar_to_description}&quot; ({formatCurrency(row.amount)})
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Transaction preview (collapsible) */}
+                <Card>
+                  <CardHeader>
+                    <button
+                      onClick={() => setShowTransactions(!showTransactions)}
+                      className="flex items-center justify-between w-full"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FileSpreadsheet className="h-4 w-4 text-slate-400" />
+                        <CardTitle>Transacoes ({analysis.transactions_preview.length})</CardTitle>
+                      </div>
+                      {showTransactions ? (
+                        <ChevronUp className="h-4 w-4 text-slate-400" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                      )}
+                    </button>
+                  </CardHeader>
+                  {showTransactions && (
+                    <CardContent>
+                      <div className="overflow-x-auto rounded-lg border border-slate-200 max-h-[500px] overflow-y-auto">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-medium text-slate-500">#</th>
+                              <th className="px-3 py-2 text-left font-medium text-slate-500">Status</th>
+                              <th className="px-3 py-2 text-left font-medium text-slate-500">Data</th>
+                              <th className="px-3 py-2 text-left font-medium text-slate-500">Descricao</th>
+                              <th className="px-3 py-2 text-right font-medium text-slate-500">Valor</th>
+                              <th className="px-3 py-2 text-right font-medium text-slate-500">Saldo Calc.</th>
+                              {analysis.transactions_preview.some(t => t.file_balance !== null) && (
+                                <>
+                                  <th className="px-3 py-2 text-right font-medium text-slate-500">Saldo Arq.</th>
+                                  <th className="px-3 py-2 text-center font-medium text-slate-500">OK</th>
+                                </>
+                              )}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analysis.transactions_preview.map((t) => {
+                              const statusColor =
+                                t.status === 'new' ? 'text-emerald-600 bg-emerald-50' :
+                                t.status === 'duplicate' ? 'text-slate-400 bg-slate-50' :
+                                'text-amber-600 bg-amber-50';
+                              return (
+                                <tr
+                                  key={t.row}
+                                  className={`border-t border-slate-100 ${t.status === 'duplicate' ? 'opacity-50' : ''}`}
+                                >
+                                  <td className="px-3 py-1.5 text-slate-400">{t.row}</td>
+                                  <td className="px-3 py-1.5">
+                                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${statusColor}`}>
+                                      {t.status === 'new' ? 'Nova' : t.status === 'duplicate' ? 'Dup' : 'Incerta'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-1.5 text-slate-600 whitespace-nowrap">
+                                    {t.date}
+                                    {t.adjusted_date && t.adjusted_date !== t.date && (
+                                      <span className="text-primary-500 ml-1" title={`Ajustada: ${t.adjusted_date}`}>*</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-slate-700 max-w-xs truncate">
+                                    {t.description}
+                                    {t.is_installment && (
+                                      <Badge color="violet" variant="soft" size="sm" className="ml-1">parc</Badge>
+                                    )}
+                                  </td>
+                                  <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${t.amount >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                    {formatCurrency(t.amount)}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">
+                                    {t.running_balance !== null ? formatCurrency(t.running_balance) : '-'}
+                                  </td>
+                                  {analysis.transactions_preview.some(tx => tx.file_balance !== null) && (
+                                    <>
+                                      <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">
+                                        {t.file_balance !== null ? formatCurrency(t.file_balance) : '-'}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-center">
+                                        {t.balance_ok === true && <CheckCircle className="h-3.5 w-3.5 text-emerald-500 inline" />}
+                                        {t.balance_ok === false && <X className="h-3.5 w-3.5 text-rose-500 inline" />}
+                                      </td>
+                                    </>
+                                  )}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+
+                {/* Action buttons */}
+                <div className="flex items-center gap-3 justify-between">
+                  <Button variant="secondary" onClick={resetImport}>
+                    <ArrowLeft className="h-4 w-4 mr-1.5" />
+                    Voltar
+                  </Button>
+                  <div className="flex items-center gap-3">
+                    {!showMapping && (
+                      <Button variant="secondary" size="sm" onClick={() => setShowMapping(true)}>
+                        <Settings2 className="h-4 w-4 mr-1.5" />
+                        Ajustar mapeamento
+                      </Button>
+                    )}
+                    <Button
+                      onClick={() => processMutation.mutate()}
+                      disabled={processMutation.isPending || analysis.new_count === 0}
+                      isLoading={processMutation.isPending}
+                    >
+                      Importar {analysis.new_count} transacao{analysis.new_count !== 1 ? 'es' : ''}
+                      <ArrowRight className="h-4 w-4 ml-1.5" />
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Loading analysis */}
+            {!analysis && !analyzeMutation.isPending && !showMapping && (
+              <div className="text-center py-8 text-slate-400">
+                <p>Abra o mapeamento de colunas para configurar e analisar</p>
+              </div>
+            )}
+            {analyzeMutation.isPending && (
+              <div className="text-center py-12">
+                <div className="w-10 h-10 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin mx-auto" />
+                <p className="mt-3 text-sm text-slate-500">Analisando arquivo...</p>
+              </div>
+            )}
+
+            {analyzeMutation.isError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-sm text-rose-700">
+                <AlertCircle className="inline h-4 w-4 mr-1.5" />
+                {(analyzeMutation.error as any)?.response?.data?.detail || 'Erro na analise'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Step 3: Result */}
+        {step === 'result' && result && (
+          <Card>
+            <CardContent className="pt-8 text-center">
+              <div className={`w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center ${
+                result.success ? 'bg-emerald-50' : 'bg-rose-50'
+              }`}>
+                {result.success ? (
+                  <CheckCircle className="h-8 w-8 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="h-8 w-8 text-rose-600" />
+                )}
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">
+                {result.success ? 'Importacao concluida!' : 'Importacao com problemas'}
+              </h2>
+
+              <div className="grid grid-cols-3 gap-4 max-w-md mx-auto my-6">
+                <div className="p-3 bg-emerald-50 rounded-xl">
+                  <p className="text-2xl font-bold text-emerald-700">{result.imported_count}</p>
+                  <p className="text-xs text-emerald-600">Importadas</p>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-xl">
+                  <p className="text-2xl font-bold text-slate-500">{result.duplicate_count}</p>
+                  <p className="text-xs text-slate-400">Duplicadas</p>
+                </div>
+                <div className="p-3 bg-rose-50 rounded-xl">
+                  <p className="text-2xl font-bold text-rose-600">{result.error_count}</p>
+                  <p className="text-xs text-rose-500">Erros</p>
+                </div>
+              </div>
+
+              {result.categories_assigned > 0 && (
+                <p className="text-sm text-slate-500 mb-2">
+                  {result.categories_assigned} transacoes categorizadas automaticamente
+                </p>
+              )}
+
+              {result.balance_validated && (
+                <div className={`p-3 rounded-xl text-sm mb-4 ${
+                  result.balance_matches ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                }`}>
+                  {result.balance_matches
+                    ? 'Saldo validado e confere!'
+                    : `Saldo diverge: diferenca de ${formatCurrency(result.balance_difference || 0)}`
+                  }
+                </div>
+              )}
+
+              {result.errors.length > 0 && (
+                <div className="text-left mt-4 p-4 bg-rose-50 rounded-xl max-h-48 overflow-y-auto">
+                  <p className="text-sm font-medium text-rose-700 mb-2">Erros:</p>
+                  {result.errors.slice(0, 10).map((err, i) => (
+                    <p key={i} className="text-xs text-rose-600">
+                      Linha {err.row}: {err.message}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-6">
+                <Button onClick={resetImport}>
+                  Nova importacao
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* Delete batch modal */}
+      {deletingBatchId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl p-6 shadow-elevated max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-slate-900 mb-2">Reverter importacao?</h3>
+            <p className="text-sm text-slate-500 mb-5">
+              Todas as transacoes deste lote serao excluidas e o saldo da conta sera ajustado.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <Button variant="secondary" size="sm" onClick={() => setDeletingBatchId(null)}>
+                Cancelar
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => revertMutation.mutate(deletingBatchId)}
+                isLoading={revertMutation.isPending}
+              >
+                Reverter
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   );
 }

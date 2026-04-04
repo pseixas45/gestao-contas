@@ -5,14 +5,14 @@ Schemas para projeção de caixa.
 from pydantic import BaseModel, ConfigDict, field_validator
 from decimal import Decimal
 from typing import Optional, List
-from datetime import date
+import datetime
 import re
 
 
 class CashProjectionItemBase(BaseModel):
     """Base para item de projeção."""
     account_id: int
-    date: date
+    date: datetime.date
     description: str
     amount_brl: Decimal
     category_id: Optional[int] = None
@@ -27,7 +27,7 @@ class CashProjectionItemCreate(CashProjectionItemBase):
 
 class CashProjectionItemUpdate(BaseModel):
     """Schema para atualizar item de projeção."""
-    date: Optional[date] = None
+    date: Optional[datetime.date] = None
     description: Optional[str] = None
     amount_brl: Optional[Decimal] = None
     category_id: Optional[int] = None
@@ -48,7 +48,7 @@ class CashProjectionItemResponse(CashProjectionItemBase):
 
 class CashProjectionDayBalance(BaseModel):
     """Saldo de um dia específico."""
-    date: date
+    date: datetime.date
     opening_balance: Decimal  # Saldo no início do dia
     entries: Decimal          # Total de entradas (positivo)
     exits: Decimal            # Total de saídas (negativo)
@@ -59,14 +59,14 @@ class CashProjectionSummary(BaseModel):
     """Resumo de projeção de caixa para um período."""
     account_id: Optional[int] = None  # None = todas as contas
     account_name: Optional[str] = None
-    start_date: date
-    end_date: date
+    start_date: datetime.date
+    end_date: datetime.date
     initial_balance: Decimal  # Saldo real até start_date
     total_entries: Decimal
     total_exits: Decimal
     final_balance: Decimal
     min_balance: Decimal      # Menor saldo no período
-    min_balance_date: date    # Data do menor saldo
+    min_balance_date: datetime.date    # Data do menor saldo
     daily_balances: List[CashProjectionDayBalance]
 
 

@@ -1,14 +1,15 @@
-from typing import List
+from typing import List, Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.api.deps import get_db
-from app.models import BankAccount, Bank, Transaction, User
+from app.models import BankAccount, Bank, Transaction, User, AccountBalanceLog
 from app.models.exchange_rate import CurrencyCode, ExchangeRate
 from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse, AccountBalance
 from app.utils.security import get_current_active_user
+from app.services.balance_log_service import log_balance_change
 
 
 def _get_amount_column(currency: CurrencyCode):
@@ -196,7 +197,8 @@ def recalculate_balance(
     old_balance = account.current_balance
 
     # Atualizar saldo
-    account.current_balance = calculated_balance
+    log_balance_change(db, account, calculated_balance,
+                       'recalculate', f'Recalculated from {old_balance}')
     db.commit()
 
     return AccountBalance(
@@ -205,3 +207,37 @@ def recalculate_balance(
         calculated_balance=calculated_balance,
         difference=old_balance - calculated_balance
     )
+
+
+@router.get("/{account_id}/balance-log")
+def get_balance_log(
+    account_id: int,
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Histórico de alterações de saldo da conta."""
+    account = db.query(BankAccount).filter(BankAccount.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Conta não encontrada")
+
+    logs = (
+        db.query(AccountBalanceLog)
+        .filter(AccountBalanceLog.account_id == account_id)
+        .order_by(AccountBalanceLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": log.id,
+            "old_balance": float(log.old_balance),
+            "new_balance": float(log.new_balance),
+            "change_amount": float(log.change_amount),
+            "reason": log.reason,
+            "detail": log.detail,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in logs
+    ]

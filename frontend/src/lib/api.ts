@@ -16,6 +16,7 @@ import type {
   Projection,
   User,
   LoginResponse,
+  DashboardSummary,
 } from '@/types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -268,6 +269,11 @@ export const rulesApi = {
     const response = await api.post('/rules/apply-all');
     return response.data;
   },
+
+  seed: async (): Promise<{ rules_created: number; skipped_no_category: number; skipped_existing: number; total_active_rules: number }> => {
+    const response = await api.post('/rules/seed');
+    return response.data;
+  },
 };
 
 // Imports
@@ -289,6 +295,7 @@ export const importsApi = {
     validate_balance?: boolean;
     expected_final_balance?: number;
     skip_duplicates?: boolean;
+    card_payment_date?: string;
   }): Promise<ImportResult> => {
     const response = await api.post('/imports/process', data);
     return response.data;
@@ -313,9 +320,19 @@ export const importsApi = {
     batch_id: number;
     column_mapping: ColumnMapping;
     account_id: number;
+    card_payment_date?: string;
   }): Promise<ImportAnalysis> => {
     const response = await api.post('/imports/analyze', data);
     return response.data;
+  },
+
+  getTemplate: async (accountId: number): Promise<{ column_mapping: ColumnMapping; success_count: number } | null> => {
+    const response = await api.get(`/imports/templates/${accountId}`);
+    return response.data;
+  },
+
+  deleteTemplate: async (accountId: number): Promise<void> => {
+    await api.delete(`/imports/templates/${accountId}`);
   },
 
   overlapCheck: async (accountId: number, startDate: string, endDate: string): Promise<OverlapCheckResponse> => {
@@ -327,7 +344,86 @@ export const importsApi = {
 };
 
 // Projections
+export interface UncertainMatch {
+  projected_id: number;
+  projected_description: string;
+  projected_amount: number;
+  projected_date: string;
+  matched_transaction_id: number | null;
+  matched_description: string | null;
+  matched_amount: number | null;
+  matched_date: string | null;
+  confidence: number;
+}
+
+export interface MonthlyProjection {
+  account_id: number;
+  account_name: string;
+  month: string;
+  current_balance: number;
+  balance_at_month_start: number;
+  projected_final_balance: number;
+  entries: Array<{
+    date: string;
+    description: string;
+    amount: number;
+    category_name: string | null;
+    category_color: string | null;
+    type: 'real' | 'projected' | 'uncertain';
+    id: number;
+    is_recurring?: boolean;
+  }>;
+  daily_balances: Array<{
+    date: string;
+    balance: number;
+    is_past: boolean;
+  }>;
+  real_count: number;
+  projected_count: number;
+  realized_count: number;
+  uncertain_matches: UncertainMatch[];
+}
+
+export interface RecurringDetection {
+  description: string;
+  normalized_description: string;
+  avg_amount: number;
+  avg_day: number;
+  std_day: number;
+  day_is_fixed: boolean;
+  occurrences: number;
+  cv: number;
+  category_id: number | null;
+  category_name: string | null;
+}
+
 export const projectionsApi = {
+  getMonthly: async (accountId: number, month: string): Promise<MonthlyProjection> => {
+    const response = await api.get(`/projections/${accountId}/monthly`, {
+      params: { month },
+    });
+    return response.data;
+  },
+
+  detectRecurring: async (accountId: number, minOccurrences = 3): Promise<RecurringDetection[]> => {
+    const response = await api.post('/projections/detect-recurring', null, {
+      params: { account_id: accountId, min_occurrences: minOccurrences },
+    });
+    return response.data;
+  },
+
+  confirmRecurring: async (accountId: number, items: Array<{
+    description: string;
+    amount: number;
+    recurring_day: number;
+    category_id?: number | null;
+  }>): Promise<{ created_count: number }> => {
+    const response = await api.post('/projections/confirm-recurring', items, {
+      params: { account_id: accountId },
+    });
+    return response.data;
+  },
+
   get: async (accountId: number, monthsAhead = 3, method = 'average'): Promise<{
     account_id: number;
     account_name: string;
@@ -350,6 +446,42 @@ export const projectionsApi = {
   }>> => {
     const response = await api.get(`/projections/${accountId}/recurring`, {
       params: { min_occurrences: minOccurrences },
+    });
+    return response.data;
+  },
+
+  createItem: async (item: {
+    account_id: number;
+    date: string;
+    description: string;
+    amount_brl: number;
+    category_id?: number | null;
+    is_recurring?: boolean;
+    recurring_day?: number | null;
+  }): Promise<{ id: number }> => {
+    const response = await api.post('/projections/cash/items', item);
+    return response.data;
+  },
+
+  updateItem: async (id: number, updates: {
+    date?: string;
+    description?: string;
+    amount_brl?: number;
+    category_id?: number | null;
+    is_recurring?: boolean;
+    recurring_day?: number | null;
+  }): Promise<{ id: number }> => {
+    const response = await api.put(`/projections/cash/items/${id}`, updates);
+    return response.data;
+  },
+
+  deleteItem: async (id: number): Promise<void> => {
+    await api.delete(`/projections/cash/items/${id}`);
+  },
+
+  confirmMatch: async (projectedId: number, action: 'confirm' | 'reject'): Promise<{ message: string; id: number }> => {
+    const response = await api.post('/projections/confirm-match', null, {
+      params: { projected_id: projectedId, action },
     });
     return response.data;
   },
@@ -444,6 +576,13 @@ export const reportsApi = {
 
   deleteSavedView: async (id: number): Promise<void> => {
     await api.delete(`/reports/saved-views/${id}`);
+  },
+
+  dashboardSummary: async (month?: string): Promise<DashboardSummary> => {
+    const response = await api.get('/reports/dashboard-summary', {
+      params: month ? { month } : undefined,
+    });
+    return response.data;
   },
 };
 

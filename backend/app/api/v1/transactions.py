@@ -9,6 +9,7 @@ from datetime import date
 from app.api.deps import get_db
 from app.models import Transaction, BankAccount, Category, User
 from app.models.exchange_rate import CurrencyCode
+from app.services.balance_log_service import log_balance_change
 from app.schemas.transaction import (
     TransactionCreate, TransactionUpdate, TransactionResponse,
     TransactionFilter, BulkCategorize, TransactionSuggestion
@@ -20,6 +21,74 @@ from app.services.exchange_service import ExchangeService
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Palavras genéricas bancárias que não devem virar regras de categorização
+_RULE_STOPWORDS = {
+    'pix', 'pag', 'pagamento', 'pagamentos', 'transferencia', 'transf',
+    'boleto', 'ted', 'doc', 'tit', 'titulo', 'int', 'sispag', 'cred',
+    'deb', 'debito', 'credito', 'deposito', 'banco', 'resg', 'resgate',
+    'qrs', 'parcela', 'parc', 'compra', 'venda', 'pgto', 'receb',
+    'recebimento', 'lanc', 'lancamento', 'mov', 'movimentacao', 'tarifa',
+    'taxa', 'envio', 'recebido', 'enviado', 'estorno', 'devolucao',
+}
+
+
+def _extract_rule_keyword(description: str) -> str:
+    """Extrai a melhor palavra-chave da descrição para criar uma regra.
+
+    Pula palavras genéricas bancárias e retorna a primeira palavra
+    significativa com 3+ caracteres.
+    """
+    from app.services.categorization_service import TextProcessor
+    text_proc = TextProcessor()
+    normalized = text_proc.normalize(description)
+    words = [w for w in (normalized or "").split() if len(w) >= 3]
+    for word in words:
+        if word not in _RULE_STOPWORDS:
+            return word
+    return ""
+
+
+def _create_or_update_rule(db: Session, keyword: str, category_id: int):
+    """Cria ou atualiza regra, desativando conflitantes."""
+    from app.models import CategorizationRule, MatchType
+
+    if not keyword:
+        return
+
+    # Desativar regras conflitantes (mesmo padrão, categoria diferente)
+    conflicting = (
+        db.query(CategorizationRule)
+        .filter(
+            CategorizationRule.pattern.ilike(keyword),
+            CategorizationRule.category_id != category_id,
+            CategorizationRule.is_active == True
+        )
+        .all()
+    )
+    for r in conflicting:
+        r.is_active = False
+
+    # Criar ou reativar regra para a categoria correta
+    existing_rule = (
+        db.query(CategorizationRule)
+        .filter(
+            CategorizationRule.pattern.ilike(keyword),
+            CategorizationRule.category_id == category_id
+        )
+        .first()
+    )
+    if existing_rule:
+        existing_rule.is_active = True
+        existing_rule.hit_count += 1
+    else:
+        rule = CategorizationRule(
+            category_id=category_id,
+            pattern=keyword,
+            match_type=MatchType.CONTAINS,
+            priority=50
+        )
+        db.add(rule)
 
 
 @router.get("")
@@ -45,8 +114,11 @@ def list_transactions(
     # Aplicar filtros
     if account_id:
         query = query.filter(Transaction.account_id == account_id)
-    if category_id:
-        query = query.filter(Transaction.category_id == category_id)
+    if category_id is not None:
+        if category_id == 0:
+            query = query.filter(Transaction.category_id.is_(None))
+        else:
+            query = query.filter(Transaction.category_id == category_id)
     if start_date:
         query = query.filter(Transaction.date >= start_date)
     if end_date:
@@ -272,7 +344,8 @@ async def create_transaction(
     db.add(transaction)
 
     # Atualizar saldo da conta (amount = valor na moeda da conta)
-    account.current_balance += amount
+    log_balance_change(db, account, account.current_balance + amount,
+                       'transaction_create', f'Transaction {transaction.description[:80]}')
 
     db.commit()
     db.refresh(transaction)
@@ -295,6 +368,7 @@ async def update_transaction(
         raise HTTPException(status_code=404, detail="Transação não encontrada")
 
     old_amount = transaction.amount
+    old_category_id = transaction.category_id
     update_data = transaction_data.model_dump(exclude_unset=True)
 
     # Verificar categoria (se informada)
@@ -339,7 +413,9 @@ async def update_transaction(
     # Se valor mudou, atualizar saldo e recalcular hash
     if "amount" in update_data:
         difference = transaction.amount - old_amount
-        transaction.account.current_balance += difference
+        log_balance_change(db, transaction.account,
+                           transaction.account.current_balance + difference,
+                           'transaction_update', f'Transaction {transaction.id} amount changed')
         transaction.set_hash()
 
         # Se novo hash colide com outro registro, usar sufixo
@@ -356,6 +432,16 @@ async def update_transaction(
                 transaction.account_id, transaction.date, transaction.description,
                 transaction.original_amount, transaction.original_currency, suffix
             )
+
+    # Se categoria mudou, aprender com a mudança
+    new_category_id = update_data.get("category_id")
+    if new_category_id and new_category_id != old_category_id and transaction.description:
+        categorization_service = CategorizationService(db)
+        categorization_service.learn_from_categorization(
+            transaction.description,
+            new_category_id,
+            old_category_id=old_category_id
+        )
 
     db.commit()
     db.refresh(transaction)
@@ -385,29 +471,22 @@ def update_transaction_category(
     if not category:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
+    old_category_id = transaction.category_id
     transaction.category_id = category_id
     transaction.is_validated = True
 
-    # Aprender com esta categorização
+    # Aprender com esta categorização (passa old_category_id para decrementar)
     categorization_service = CategorizationService(db)
     categorization_service.learn_from_categorization(
         transaction.description,
-        category_id
+        category_id,
+        old_category_id=old_category_id
     )
 
     # Criar regra automática se solicitado
-    if create_rule:
-        from app.models import CategorizationRule, MatchType
-        # Extrair palavra-chave principal da descrição
-        keyword = transaction.description.split()[0] if transaction.description else ""
-        if keyword and len(keyword) >= 3:
-            rule = CategorizationRule(
-                category_id=category_id,
-                pattern=keyword.upper(),
-                match_type=MatchType.CONTAINS,
-                priority=0
-            )
-            db.add(rule)
+    if create_rule and transaction.description:
+        keyword = _extract_rule_keyword(transaction.description)
+        _create_or_update_rule(db, keyword, category_id)
 
     db.commit()
     return {"message": "Categoria atualizada com sucesso"}
@@ -426,16 +505,27 @@ def bulk_categorize(
 
     updated = 0
     categorization_service = CategorizationService(db)
+    rule_created = False
 
     for t_id in data.transaction_ids:
         transaction = db.query(Transaction).filter(Transaction.id == t_id).first()
         if transaction:
+            old_category_id = transaction.category_id
             transaction.category_id = data.category_id
             transaction.is_validated = True
             categorization_service.learn_from_categorization(
                 transaction.description,
-                data.category_id
+                data.category_id,
+                old_category_id=old_category_id
             )
+
+            # Criar regra a partir da primeira transação do grupo
+            if not rule_created and transaction.description:
+                keyword = _extract_rule_keyword(transaction.description)
+                if keyword:
+                    _create_or_update_rule(db, keyword, data.category_id)
+                    rule_created = True
+
             updated += 1
 
     db.commit()
@@ -455,7 +545,8 @@ def delete_transaction(
 
     # Atualizar saldo da conta
     account = transaction.account
-    account.current_balance -= transaction.amount
+    log_balance_change(db, account, account.current_balance - transaction.amount,
+                       'transaction_delete', f'Transaction {transaction.id} deleted')
 
     db.delete(transaction)
     db.commit()

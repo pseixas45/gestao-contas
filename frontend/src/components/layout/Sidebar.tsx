@@ -7,13 +7,14 @@ import {
   Wallet,
   ArrowLeftRight,
   Upload,
-  History,
   Tag,
   TrendingUp,
   LogOut,
   AlertCircle,
   BarChart3,
   PiggyBank,
+  Settings,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,6 +25,11 @@ interface NavItem {
   badge?: number;
 }
 
+interface NavSection {
+  title?: string;
+  items: NavItem[];
+}
+
 interface SidebarProps {
   pendingCount?: number;
   onLogout: () => void;
@@ -32,108 +38,106 @@ interface SidebarProps {
 export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
   const pathname = usePathname();
 
-  const navItems: NavItem[] = [
+  const sections: NavSection[] = [
     {
-      href: '/',
-      label: 'Dashboard',
-      icon: <LayoutDashboard size={20} />,
+      items: [
+        { href: '/', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+      ],
     },
     {
-      href: '/contas',
-      label: 'Contas',
-      icon: <Wallet size={20} />,
+      title: 'Operações',
+      items: [
+        { href: '/importar', label: 'Importar', icon: <Upload size={18} /> },
+        { href: '/transacoes', label: 'Transações', icon: <ArrowLeftRight size={18} /> },
+        { href: '/transacoes/pendentes', label: 'Pendentes', icon: <AlertCircle size={18} />, badge: pendingCount },
+      ],
     },
     {
-      href: '/transacoes',
-      label: 'Transações',
-      icon: <ArrowLeftRight size={20} />,
+      title: 'Análise',
+      items: [
+        { href: '/relatorios', label: 'Relatórios', icon: <BarChart3 size={18} /> },
+        { href: '/orcamento', label: 'Orçamento', icon: <PiggyBank size={18} /> },
+        { href: '/projecao', label: 'Projeção', icon: <TrendingUp size={18} /> },
+      ],
     },
     {
-      href: '/transacoes/pendentes',
-      label: 'Pendentes',
-      icon: <AlertCircle size={20} />,
-      badge: pendingCount,
-    },
-    {
-      href: '/importar',
-      label: 'Importar',
-      icon: <Upload size={20} />,
-    },
-    {
-      href: '/importar/historico',
-      label: 'Carga Histórico',
-      icon: <History size={20} />,
-    },
-    {
-      href: '/categorias',
-      label: 'Categorias',
-      icon: <Tag size={20} />,
-    },
-    {
-      href: '/relatorios',
-      label: 'Relatórios',
-      icon: <BarChart3 size={20} />,
-    },
-    {
-      href: '/orcamento',
-      label: 'Orçamento',
-      icon: <PiggyBank size={20} />,
-    },
-    {
-      href: '/projecao',
-      label: 'Projeção',
-      icon: <TrendingUp size={20} />,
+      title: 'Configuração',
+      items: [
+        { href: '/contas', label: 'Contas', icon: <Wallet size={18} /> },
+        { href: '/categorias', label: 'Categorias', icon: <Tag size={18} /> },
+        { href: '/categorias/regras', label: 'Regras', icon: <BookOpen size={18} /> },
+      ],
     },
   ];
 
   return (
-    <aside className="w-64 bg-white border-r border-gray-200 min-h-screen flex flex-col">
+    <aside className="w-[220px] bg-white border-r border-slate-200/80 min-h-screen flex flex-col">
       {/* Logo */}
-      <div className="p-6 border-b border-gray-200">
-        <h1 className="text-xl font-bold text-gray-800">
-          Gestão de Contas
-        </h1>
+      <div className="px-5 py-5 border-b border-slate-100">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center">
+            <Wallet className="h-4 w-4 text-white" />
+          </div>
+          <div>
+            <h1 className="text-sm font-bold text-slate-800 leading-tight">Gestão</h1>
+            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">de Contas</p>
+          </div>
+        </div>
       </div>
 
       {/* Navegação */}
-      <nav className="flex-1 p-4">
-        <ul className="space-y-1">
-          {navItems.map((item) => {
-            const isActive = pathname === item.href ||
-              (item.href !== '/' && pathname.startsWith(item.href));
+      <nav className="flex-1 px-3 py-3 overflow-y-auto">
+        {sections.map((section, sIdx) => (
+          <div key={sIdx} className={sIdx > 0 ? 'mt-5' : ''}>
+            {section.title && (
+              <p className="px-3 mb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                {section.title}
+              </p>
+            )}
+            <ul className="space-y-0.5">
+              {section.items.map((item) => {
+                const isActive = pathname === item.href ||
+                  (item.href !== '/' && pathname.startsWith(item.href));
 
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-3 px-4 py-3 rounded-lg transition-colors',
-                    isActive
-                      ? 'bg-primary-50 text-primary-700 font-medium'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  )}
-                >
-                  {item.icon}
-                  <span>{item.label}</span>
-                  {item.badge && item.badge > 0 && (
-                    <span className="ml-auto bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={cn(
+                        'flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-default',
+                        isActive
+                          ? 'bg-primary-50 text-primary-700 font-medium'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      )}
+                    >
+                      <span className={cn(
+                        'flex-shrink-0',
+                        isActive ? 'text-primary-600' : 'text-slate-400'
+                      )}>
+                        {item.icon}
+                      </span>
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="flex-shrink-0 min-w-[20px] h-5 flex items-center justify-center bg-rose-500 text-white text-[10px] font-bold px-1.5 rounded-md">
+                          {item.badge > 99 ? '99+' : item.badge}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
-      {/* Logout */}
-      <div className="p-4 border-t border-gray-200">
+      {/* Footer */}
+      <div className="px-3 py-3 border-t border-slate-100">
         <button
           onClick={onLogout}
-          className="flex items-center gap-3 px-4 py-3 w-full text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          className="flex items-center gap-2.5 px-3 py-2 w-full text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-xl transition-default"
         >
-          <LogOut size={20} />
+          <LogOut size={18} />
           <span>Sair</span>
         </button>
       </div>

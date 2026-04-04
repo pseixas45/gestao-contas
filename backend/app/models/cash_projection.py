@@ -34,6 +34,8 @@ class CashProjectionItem(Base):
     is_recurring = Column(Boolean, default=False)  # Se é item recorrente
     recurring_day = Column(Integer, nullable=True)  # Dia do mês para recorrência
     is_confirmed = Column(Boolean, default=False)  # Se já foi confirmado/realizado
+    source = Column(String(20), default='manual')  # 'manual', 'auto_detected', 'imported'
+    is_active = Column(Boolean, default=True)  # Para desativar sem deletar
 
     # Campos de auditoria
     created_at = Column(DateTime, default=datetime.utcnow)

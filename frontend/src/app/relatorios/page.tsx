@@ -287,7 +287,7 @@ export default function RelatoriosPage() {
     if (!txs || txs.length === 0) {
       return (
         <tr>
-          <td colSpan={(report?.months.length || 0) + 2} className="px-4 py-2 pl-12 text-sm text-gray-400 italic">
+          <td colSpan={(report?.months.length || 0) + 2} className="px-4 py-2 pl-12 text-sm text-slate-300 italic">
             Nenhuma transação encontrada
           </td>
         </tr>
@@ -298,22 +298,22 @@ export default function RelatoriosPage() {
       const month = txMonth(tx.date);
       const val = Number(tx[amountField as keyof typeof tx] as number);
       return (
-        <tr key={`tx-${categoryId}-${idx}`} className="bg-gray-50/50 hover:bg-gray-100/50">
-          <td className="px-4 py-1.5 pl-12 sticky left-0 bg-gray-50/80 z-10">
-            <div className="flex items-center gap-2 text-xs text-gray-600">
-              <span className="text-gray-400 w-[70px] flex-shrink-0">{formatDate(tx.date)}</span>
+        <tr key={`tx-${categoryId}-${idx}`} className="bg-slate-50/50 hover:bg-slate-100/50">
+          <td className="px-4 py-1.5 pl-12 sticky left-0 bg-slate-50/80 z-10">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="text-slate-300 w-[70px] flex-shrink-0">{formatDate(tx.date)}</span>
               <span className="truncate" title={tx.description}>{tx.description}</span>
               {tx.account_name && (
-                <span className="text-gray-400 flex-shrink-0">({tx.account_name})</span>
+                <span className="text-slate-300 flex-shrink-0">({tx.account_name})</span>
               )}
             </div>
           </td>
           {report!.months.map((m) => (
-            <td key={m} className={`px-3 py-1.5 text-right text-xs ${m === month && val > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+            <td key={m} className={`px-3 py-1.5 text-right text-xs ${m === month && val > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
               {m === month ? formatCurrency(val, currencyCode) : ''}
             </td>
           ))}
-          <td className={`px-4 py-1.5 text-right text-xs font-medium bg-gray-50 ${val > 0 ? 'text-green-600' : 'text-gray-600'}`}>
+          <td className={`px-4 py-1.5 text-right text-xs font-medium bg-slate-50 ${val > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
             {formatCurrency(val, currencyCode)}
           </td>
         </tr>
@@ -345,33 +345,33 @@ export default function RelatoriosPage() {
           return (
             <Fragment key={row.category_id}>
               <tr
-                className="hover:bg-gray-50 cursor-pointer"
+                className="hover:bg-slate-50 cursor-pointer"
                 onClick={() => handleToggleCategory(row.category_id)}
               >
                 <td className="px-4 py-2 pl-6 sticky left-0 bg-white z-10">
                   <div className="flex items-center gap-1.5">
                     {isLoadingThis ? (
-                      <Loader2 size={14} className="animate-spin text-gray-400 flex-shrink-0" />
+                      <Loader2 size={14} className="animate-spin text-slate-300 flex-shrink-0" />
                     ) : isExpanded ? (
-                      <ChevronDown size={14} className="text-gray-400 flex-shrink-0" />
+                      <ChevronDown size={14} className="text-slate-300 flex-shrink-0" />
                     ) : (
-                      <ChevronRight size={14} className="text-gray-400 flex-shrink-0" />
+                      <ChevronRight size={14} className="text-slate-300 flex-shrink-0" />
                     )}
                     {row.category_color && (
                       <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: row.category_color }} />
                     )}
-                    <span className="text-gray-800">{row.category_name}</span>
+                    <span className="text-slate-800">{row.category_name}</span>
                   </div>
                 </td>
                 {report!.months.map((m) => {
                   const val = Number(row.values[m] || 0);
                   return (
-                    <td key={m} className={`px-3 py-2 text-right ${val > 0 ? 'text-green-700' : 'text-gray-700'}`}>
+                    <td key={m} className={`px-3 py-2 text-right ${val > 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
                       {val !== 0 ? formatCurrency(val, currencyCode) : '-'}
                     </td>
                   );
                 })}
-                <td className={`px-4 py-2 text-right font-semibold bg-gray-50 ${Number(row.total) > 0 ? 'text-green-700' : 'text-gray-800'}`}>
+                <td className={`px-4 py-2 text-right font-semibold bg-slate-50 ${Number(row.total) > 0 ? 'text-emerald-700' : 'text-slate-800'}`}>
                   {formatCurrency(Number(row.total), currencyCode)}
                 </td>
               </tr>
@@ -381,8 +381,8 @@ export default function RelatoriosPage() {
           );
         })}
         {/* Subtotal row */}
-        <tr className="border-t border-gray-300">
-          <td className={`px-4 py-2 font-bold ${colorClass} sticky left-0 bg-gray-50 z-10`}>
+        <tr className="border-t border-slate-300">
+          <td className={`px-4 py-2 font-bold ${colorClass} sticky left-0 bg-slate-50 z-10`}>
             Subtotal {label}
           </td>
           {report!.months.map((m) => {
@@ -393,7 +393,7 @@ export default function RelatoriosPage() {
               </td>
             );
           })}
-          <td className={`px-4 py-2 text-right font-bold ${colorClass} bg-gray-100`}>
+          <td className={`px-4 py-2 text-right font-bold ${colorClass} bg-slate-100`}>
             {formatCurrency(Number(totals.total), currencyCode)}
           </td>
         </tr>
@@ -407,8 +407,8 @@ export default function RelatoriosPage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">Relatório Mensal</h1>
-            <p className="text-gray-600">Categorias × Meses (Despesas, Receitas e Transferências)</p>
+            <h1 className="text-2xl font-bold text-slate-800">Relatório Mensal</h1>
+            <p className="text-slate-500">Categorias × Meses (Despesas, Receitas e Transferências)</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {/* Save view */}
@@ -441,27 +441,27 @@ export default function RelatoriosPage() {
                 <FolderOpen size={18} className="mr-1" />
                 Visões
                 {savedViews.length > 0 && (
-                  <span className="ml-1 bg-primary-100 text-primary-700 text-xs px-1.5 py-0.5 rounded-full">
+                  <span className="ml-1 bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded-full">
                     {savedViews.length}
                   </span>
                 )}
               </Button>
               {showLoadMenu && (
-                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-64">
+                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 w-64">
                   {savedViews.length === 0 ? (
-                    <p className="p-3 text-sm text-gray-500">Nenhuma visão salva</p>
+                    <p className="p-3 text-sm text-slate-400">Nenhuma visão salva</p>
                   ) : (
                     <ul className="py-1 max-h-60 overflow-y-auto">
                       {savedViews.map((v) => (
-                        <li key={v.id} className="flex items-center justify-between px-3 py-2 hover:bg-gray-50">
+                        <li key={v.id} className="flex items-center justify-between px-3 py-2 hover:bg-slate-50">
                           <button
-                            className="flex-1 text-left text-sm text-gray-800 hover:text-primary-600"
+                            className="flex-1 text-left text-sm text-slate-800 hover:text-indigo-600"
                             onClick={() => handleLoadView(v)}
                           >
                             {v.name}
                           </button>
                           <button
-                            className="text-gray-400 hover:text-red-500 ml-2 p-1"
+                            className="text-slate-300 hover:text-rose-500 ml-2 p-1"
                             onClick={(e) => {
                               e.stopPropagation();
                               if (v.id) deleteSavedMutation.mutate(v.id);
@@ -523,17 +523,17 @@ export default function RelatoriosPage() {
             {/* Multi-account filter chips */}
             {accounts.length > 0 && (
               <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   Contas
                   {filters.account_ids.length > 0 && (
-                    <span className="text-xs text-gray-400 ml-2">({filters.account_ids.length} selecionada(s))</span>
+                    <span className="text-xs text-slate-300 ml-2">({filters.account_ids.length} selecionada(s))</span>
                   )}
                 </label>
                 <div className="flex flex-wrap gap-2">
                   {filters.account_ids.length > 0 && (
                     <button
                       onClick={() => setFilters({ ...filters, account_ids: [] })}
-                      className="px-3 py-1.5 text-xs rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100"
+                      className="px-3 py-1.5 text-xs rounded-full border border-slate-300 text-slate-500 hover:bg-slate-100"
                     >
                       Todas
                     </button>
@@ -546,8 +546,8 @@ export default function RelatoriosPage() {
                         onClick={() => handleAccountToggle(acc.id)}
                         className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
                           isSelected
-                            ? 'bg-primary-600 text-white border-primary-600 font-medium'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-medium'
+                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
                         }`}
                       >
                         {acc.name} ({acc.currency || 'BRL'})
@@ -561,21 +561,35 @@ export default function RelatoriosPage() {
             {/* Category filter chips */}
             {allFilterableCategories.length > 0 && (
               <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-slate-600 mb-2">
                   Categorias
                   {filters.category_ids.length > 0 && (
-                    <span className="text-xs text-gray-400 ml-2">({filters.category_ids.length} selecionada(s))</span>
+                    <span className="text-xs text-slate-300 ml-2">({filters.category_ids.length} selecionada(s))</span>
                   )}
                 </label>
                 <div className="flex flex-wrap gap-2">
                   {filters.category_ids.length > 0 && (
                     <button
                       onClick={() => setFilters({ ...filters, category_ids: [] })}
-                      className="px-3 py-1.5 text-xs rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100"
+                      className="px-3 py-1.5 text-xs rounded-full border border-slate-300 text-slate-500 hover:bg-slate-100"
                     >
                       Limpar filtro
                     </button>
                   )}
+                  {/* Chip especial para "Pendente (sem categoria)" */}
+                  {(() => {
+                    const isSelected = filters.category_ids.includes(0);
+                    return (
+                      <button
+                        onClick={() => handleCategoryToggle(0)}
+                        className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
+                          isSelected ? 'text-white font-medium bg-slate-500 border-slate-500' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-400 border-dashed'
+                        }`}
+                      >
+                        Pendente
+                      </button>
+                    );
+                  })()}
                   {allFilterableCategories.map((cat) => {
                     const isSelected = filters.category_ids.includes(cat.id);
                     return (
@@ -583,7 +597,7 @@ export default function RelatoriosPage() {
                         key={cat.id}
                         onClick={() => handleCategoryToggle(cat.id)}
                         className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
-                          isSelected ? 'text-white font-medium' : 'bg-white text-gray-700 hover:bg-gray-50'
+                          isSelected ? 'text-white font-medium' : 'bg-white text-slate-600 hover:bg-slate-50'
                         }`}
                         style={{
                           borderColor: cat.color,
@@ -602,46 +616,46 @@ export default function RelatoriosPage() {
 
         {/* Report Table */}
         {isLoading ? (
-          <div className="text-center py-8 text-gray-500">Carregando relatório...</div>
+          <div className="text-center py-8 text-slate-400">Carregando relatório...</div>
         ) : hasData ? (
           <Card>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-gray-50 sticky top-0">
+                  <thead className="bg-slate-50 sticky top-0">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600 min-w-[280px] sticky left-0 bg-gray-50 z-10">
+                      <th className="px-4 py-3 text-left font-medium text-slate-500 min-w-[280px] sticky left-0 bg-slate-50 z-10">
                         Categoria
                       </th>
                       {report!.months.map((m) => (
-                        <th key={m} className="px-3 py-3 text-right font-medium text-gray-600 min-w-[100px]">
+                        <th key={m} className="px-3 py-3 text-right font-medium text-slate-500 min-w-[100px]">
                           {formatMonth(m)}
                         </th>
                       ))}
-                      <th className="px-4 py-3 text-right font-bold text-gray-700 min-w-[120px] bg-gray-100">
+                      <th className="px-4 py-3 text-right font-bold text-slate-600 min-w-[120px] bg-slate-100">
                         Total
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {renderGroupRows(report!.expense_rows, report!.expense_totals, 'Despesas', 'text-red-700', 'bg-red-50')}
-                    {renderGroupRows(report!.income_rows, report!.income_totals, 'Receitas', 'text-green-700', 'bg-green-50')}
+                    {renderGroupRows(report!.expense_rows, report!.expense_totals, 'Despesas', 'text-rose-700', 'bg-rose-50')}
+                    {renderGroupRows(report!.income_rows, report!.income_totals, 'Receitas', 'text-emerald-700', 'bg-emerald-50')}
                     {renderGroupRows(report!.transfer_rows, report!.transfer_totals, 'Transferências', 'text-blue-700', 'bg-blue-50')}
                   </tbody>
-                  <tfoot className="bg-gray-100 border-t-2 border-gray-300">
+                  <tfoot className="bg-slate-100 border-t-2 border-slate-300">
                     <tr>
-                      <td className="px-4 py-3 font-bold text-gray-700 sticky left-0 bg-gray-100 z-10">
+                      <td className="px-4 py-3 font-bold text-slate-600 sticky left-0 bg-slate-100 z-10">
                         SALDO LÍQUIDO
                       </td>
                       {report!.months.map((m) => {
                         const val = Number(report!.column_totals[m] || 0);
                         return (
-                          <td key={m} className={`px-3 py-3 text-right font-bold ${val >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          <td key={m} className={`px-3 py-3 text-right font-bold ${val >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                             {formatCurrency(val, currencyCode)}
                           </td>
                         );
                       })}
-                      <td className={`px-4 py-3 text-right font-bold bg-gray-200 ${Number(report!.grand_total) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      <td className={`px-4 py-3 text-right font-bold bg-slate-200 ${Number(report!.grand_total) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {formatCurrency(Number(report!.grand_total), currencyCode)}
                       </td>
                     </tr>
@@ -653,7 +667,7 @@ export default function RelatoriosPage() {
         ) : report ? (
           <Card>
             <CardContent className="py-12 text-center">
-              <p className="text-gray-500">Nenhum dado encontrado para o período selecionado.</p>
+              <p className="text-slate-400">Nenhum dado encontrado para o período selecionado.</p>
             </CardContent>
           </Card>
         ) : null}

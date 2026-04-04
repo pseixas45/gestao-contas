@@ -130,9 +130,9 @@ class CategorizationService:
 
         for rule in rules:
             if self._rule_matches(rule, text):
-                # Incrementar contador de uso
+                # Incrementar contador de uso (flush, não commit — caller controla)
                 rule.hit_count += 1
-                self.db.commit()
+                self.db.flush()
                 return rule.category_id
 
         return None
@@ -162,11 +162,14 @@ class CategorizationService:
         self,
         normalized_text: str
     ) -> Tuple[Optional[int], float]:
-        """Busca correspondência exata no histórico."""
+        """Busca correspondência exata no histórico. Prefere mais recente em caso de empate."""
         history = (
             self.db.query(CategorizationHistory)
             .filter(CategorizationHistory.description_normalized == normalized_text)
-            .order_by(CategorizationHistory.times_used.desc())
+            .order_by(
+                CategorizationHistory.times_used.desc(),
+                CategorizationHistory.last_used_at.desc()
+            )
             .first()
         )
 
@@ -292,10 +295,12 @@ class CategorizationService:
     def learn_from_categorization(
         self,
         description: str,
-        category_id: int
+        category_id: int,
+        old_category_id: int = None
     ):
         """
         Aprende com uma categorização.
+        Se old_category_id fornecido, decrementa o histórico da categoria anterior.
         Nota: NÃO faz commit - o caller é responsável pelo commit.
         """
         normalized = self.text_processor.normalize(description)
@@ -303,7 +308,25 @@ class CategorizationService:
         if not normalized:
             return
 
-        # Verificar se já existe
+        # Se re-categorizando, decrementar a categoria anterior
+        if old_category_id and old_category_id != category_id:
+            old_entry = (
+                self.db.query(CategorizationHistory)
+                .filter(
+                    CategorizationHistory.description_normalized == normalized,
+                    CategorizationHistory.category_id == old_category_id
+                )
+                .first()
+            )
+            if old_entry:
+                old_entry.times_used = max(0, old_entry.times_used - 1)
+                if old_entry.times_used == 0:
+                    self.db.delete(old_entry)
+
+        # Incrementar/criar entrada para a nova categoria
+        # Flush first to ensure any pending adds are visible
+        self.db.flush()
+
         existing = (
             self.db.query(CategorizationHistory)
             .filter(
@@ -323,3 +346,4 @@ class CategorizationService:
                 times_used=1
             )
             self.db.add(new_history)
+            self.db.flush()

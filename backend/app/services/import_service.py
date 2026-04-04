@@ -37,6 +37,7 @@ from app.schemas.import_file import (
 )
 from app.services.categorization_service import CategorizationService
 from app.services.exchange_service import ExchangeService
+from app.services.balance_log_service import log_balance_change
 
 
 class ColumnDetector:
@@ -91,6 +92,11 @@ class ColumnDetector:
         'data_pagamento', 'vencimento', 'data vencimento'
     ]
 
+    INSTALLMENT_COLUMN_NAMES = [
+        'parcela', 'parcelas', 'installment', 'parc', 'nº parcela',
+        'numero parcela', 'numero_parcela'
+    ]
+
     def detect(self, data: List[Dict[str, Any]]) -> ColumnMapping:
         """Detecta mapeamento de colunas automaticamente."""
         if not data:
@@ -114,6 +120,7 @@ class ColumnDetector:
         account_col = self._detect_column(columns, sample_rows, self.ACCOUNT_COLUMN_NAMES, 'text')
         category_col = self._detect_column(columns, sample_rows, self.CATEGORY_COLUMN_NAMES, 'text')
         card_payment_col = self._detect_column(columns, sample_rows, self.CARD_PAYMENT_DATE_NAMES, 'date')
+        installment_col = self._detect_column(columns, sample_rows, self.INSTALLMENT_COLUMN_NAMES, 'text')
 
         return ColumnMapping(
             date_column=date_col or columns[0],
@@ -126,7 +133,8 @@ class ColumnDetector:
             bank_column=bank_col,
             account_column=account_col,
             category_column=category_col,
-            card_payment_date_column=card_payment_col
+            card_payment_date_column=card_payment_col,
+            installment_column=installment_col
         )
 
     def _detect_column(
@@ -165,13 +173,13 @@ def detect_installment(description: str) -> Tuple[Optional[int], Optional[int]]:
     Detecta parcela n/m na descrição.
 
     Args:
-        description: Descrição da transação
+        description: Descrição da transação ou conteúdo da coluna parcela
 
     Returns:
         (parcela_atual, total_parcelas) ou (None, None)
     """
-    # Padrão: 03/10, 1/12, etc.
-    match = re.search(r'(\d{1,2})\s*/\s*(\d{1,2})', description)
+    # Padrão: "7 de 10", "7/10", "03/10", "1 de 12"
+    match = re.search(r'(\d{1,2})\s*(?:de|/)\s*(\d{1,2})', description)
     if match:
         n = int(match.group(1))
         m = int(match.group(2))
@@ -179,6 +187,75 @@ def detect_installment(description: str) -> Tuple[Optional[int], Optional[int]]:
         if 1 <= n <= m and m > 1:
             return n, m
     return None, None
+
+
+def find_previous_installment(
+    db: Session,
+    account_id: int,
+    description_base: str,
+    installment_number: int,
+    installment_total: int,
+) -> Optional[Transaction]:
+    """
+    Busca a parcela anterior (n-1) no banco para determinar a data correta.
+
+    Tenta primeiro por campos estruturados (installment_number/total),
+    depois por texto na descrição (ex: "6 de 10", "6/10").
+
+    Args:
+        db: Sessão do banco
+        account_id: ID da conta
+        description_base: Descrição sem o sufixo de parcela (ex: "PG *POSITIVO TECN")
+        installment_number: Número da parcela atual (ex: 7)
+        installment_total: Total de parcelas (ex: 10)
+
+    Returns:
+        Transaction da parcela anterior ou None
+    """
+    if installment_number <= 1:
+        return None
+
+    prev_number = installment_number - 1
+
+    # Tentativa 1: campos estruturados
+    prev = db.query(Transaction).filter(
+        Transaction.account_id == account_id,
+        Transaction.installment_number == prev_number,
+        Transaction.installment_total == installment_total,
+        Transaction.description.ilike(f"%{description_base}%"),
+    ).order_by(Transaction.date.desc()).first()
+
+    if prev:
+        return prev
+
+    # Tentativa 2: buscar por texto na descrição (ex: "DRASTOSA 6 de 10" ou "DRASTOSA 6/10")
+    patterns = [
+        f"%{description_base}%{prev_number} de {installment_total}%",
+        f"%{description_base}%{prev_number}/{installment_total}%",
+        f"%{description_base}%{prev_number:02d}/{installment_total:02d}%",
+    ]
+    for pattern in patterns:
+        prev = db.query(Transaction).filter(
+            Transaction.account_id == account_id,
+            Transaction.description.ilike(pattern),
+        ).order_by(Transaction.date.desc()).first()
+        if prev:
+            return prev
+
+    return None
+
+
+def get_installment_base_description(description: str) -> str:
+    """
+    Remove o sufixo de parcela da descrição.
+    Ex: "PG *POSITIVO TECN 6 de 10" -> "PG *POSITIVO TECN"
+        "AG DE TURISMO 5/10" -> "AG DE TURISMO"
+    """
+    # Remove padrões como "7 de 10", "7/10", "07/10"
+    cleaned = re.sub(r'\s*\d{1,2}\s*(?:de|/)\s*\d{1,2}\s*$', '', description).strip()
+    # Remove traço final se houver (ex: "DRASTOSA -")
+    cleaned = re.sub(r'\s*-\s*$', '', cleaned).strip()
+    return cleaned
 
 
 def adjust_date_for_credit_card(original_date: date, payment_date: date) -> date:
@@ -285,7 +362,8 @@ class ImportService:
         account_id: int,
         validate_balance: bool = True,
         expected_final_balance: Optional[Decimal] = None,
-        skip_duplicates: bool = True
+        skip_duplicates: bool = True,
+        card_payment_date_override: Optional[date] = None
     ) -> ImportResult:
         """Processa a importação com o mapeamento definido."""
         batch = self.db.query(ImportBatch).filter(ImportBatch.id == batch_id).first()
@@ -322,6 +400,7 @@ class ImportService:
                         idx + 1,
                         account,
                         seen_hashes=seen_hashes,
+                        card_payment_date_override=card_payment_date_override,
                     )
 
                     if result['status'] == 'success':
@@ -356,7 +435,8 @@ class ImportService:
 
                 # Atualizar saldo da conta (usar original_amount, que é na moeda da conta)
                 total_amount = sum(t.original_amount for t in transactions)
-                account.current_balance += total_amount
+                log_balance_change(self.db, account, account.current_balance + total_amount,
+                                   'import', f'Import batch {batch.id}: {len(transactions)} txns')
 
                 batch.imported_records = len(transactions)
                 batch.duplicate_records = len(duplicates)
@@ -416,6 +496,7 @@ class ImportService:
         row_num: int,
         account: BankAccount,
         seen_hashes: set = None,
+        card_payment_date_override: Optional[date] = None,
     ) -> Dict:
         """
         Processa uma linha do arquivo.
@@ -435,8 +516,9 @@ class ImportService:
         valor_usd_str = row.get(mapping.valor_usd_column) if mapping.valor_usd_column else None
         valor_eur_str = row.get(mapping.valor_eur_column) if mapping.valor_eur_column else None
 
-        # Data de pagamento do cartão
+        # Data de pagamento do cartão (override global tem prioridade)
         card_payment_str = row.get(mapping.card_payment_date_column) if mapping.card_payment_date_column else None
+        # Se há override do formulário, usar ele
 
         # Validar campos obrigatórios
         if not date_str:
@@ -477,10 +559,27 @@ class ImportService:
         card_payment_date = None
         if card_payment_str:
             card_payment_date = self._parse_date(card_payment_str)
+        # Override global do formulário tem prioridade
+        if card_payment_date_override:
+            card_payment_date = card_payment_date_override
 
-        # Detectar parcelas na descrição
+        # Detectar parcelas (coluna dedicada tem prioridade, senão tenta na descrição)
         description_clean = str(description).strip()
-        installment_number, installment_total = detect_installment(description_clean)
+        installment_str = row.get(mapping.installment_column) if mapping.installment_column else None
+
+        installment_number, installment_total = None, None
+        if installment_str and str(installment_str).strip():
+            installment_number, installment_total = detect_installment(str(installment_str))
+
+        if installment_number is None:
+            installment_number, installment_total = detect_installment(description_clean)
+
+        # Se parcela veio da coluna dedicada, adicionar ao final da descrição
+        if installment_number is not None and installment_str and str(installment_str).strip():
+            # Só adicionar se a descrição ainda não contém info de parcela
+            existing_n, _ = detect_installment(description_clean)
+            if existing_n is None:
+                description_clean = f"{description_clean} {installment_number} de {installment_total}"
 
         # Converter valores multi-moeda
         valor_brl = self._parse_amount(valor_brl_str) if valor_brl_str and str(valor_brl_str).strip() else None
@@ -586,10 +685,32 @@ class ImportService:
         if balance_str:
             balance_after = self._parse_amount(balance_str)
 
-        # Ajustar data para cartão de crédito
+        # Ajustar data para cartão de crédito com parcelas
         effective_date = trans_date
-        if account.is_credit_card and card_payment_date:
-            effective_date = adjust_date_for_credit_card(trans_date, card_payment_date)
+        if account.is_credit_card and card_payment_date and installment_number is not None:
+            # Tentar encontrar a parcela anterior no banco para calcular data correta
+            desc_base = get_installment_base_description(description_clean)
+            prev_installment = find_previous_installment(
+                self.db, account_id, desc_base, installment_number, installment_total
+            )
+
+            if prev_installment:
+                # Usar data da parcela anterior + 1 mês
+                prev_date = prev_installment.date
+                next_month = prev_date.month + 1
+                next_year = prev_date.year
+                if next_month > 12:
+                    next_month = 1
+                    next_year += 1
+                try:
+                    effective_date = date(next_year, next_month, prev_date.day)
+                except ValueError:
+                    # Dia não existe no mês (ex: 31 em mês de 30 dias)
+                    last_day = calendar.monthrange(next_year, next_month)[1]
+                    effective_date = date(next_year, next_month, last_day)
+            else:
+                # Fallback: usar lógica original (ajustar para mês da fatura)
+                effective_date = adjust_date_for_credit_card(trans_date, card_payment_date)
 
         # Gerar hash para verificar duplicata (normalização é feita dentro de generate_hash)
         trans_hash = Transaction.generate_hash(
@@ -607,9 +728,33 @@ class ImportService:
         is_duplicate = False
         existing = None
 
-        # Verificar no set de hashes já vistos no arquivo (dedup intra-arquivo)
+        # Para duplicatas intra-arquivo (mesmo hash dentro do mesmo CSV):
+        # Não tratar como duplicata — podem ser transações legítimas distintas
+        # (ex: "PG *POSITIVO TECNO06/10" 2x R$413,62 no mesmo extrato)
+        # Em vez disso, adicionar sufixo para tornar o hash único
         if seen_hashes is not None and trans_hash in seen_hashes:
-            is_duplicate = True
+            suffix = 1
+            suffixed_hash = Transaction.generate_hash(
+                account_id, effective_date, description_clean,
+                original_amount, original_currency, suffix,
+                card_payment_date=card_payment_date
+            )
+            while suffixed_hash in seen_hashes:
+                suffix += 1
+                suffixed_hash = Transaction.generate_hash(
+                    account_id, effective_date, description_clean,
+                    original_amount, original_currency, suffix,
+                    card_payment_date=card_payment_date
+                )
+            # Verificar se o hash com sufixo já existe no banco
+            existing_suffixed = self.db.query(Transaction).filter(
+                Transaction.transaction_hash == suffixed_hash
+            ).first()
+            if existing_suffixed:
+                is_duplicate = True
+                existing = existing_suffixed
+            else:
+                trans_hash = suffixed_hash
 
         if not is_duplicate:
             existing = self.db.query(Transaction).filter(
@@ -781,7 +926,7 @@ class ImportService:
             ext = file.filename.lower().split('.')[-1]
             if ext == 'csv':
                 return FileType.CSV
-            elif ext == 'xlsx':
+            elif ext in ('xlsx', 'xls'):
                 return FileType.XLSX
             elif ext == 'pdf':
                 return FileType.PDF
@@ -812,8 +957,8 @@ class ImportService:
         """Parse arquivo CSV."""
         import csv
 
-        # Detectar encoding
-        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        # Detectar encoding (utf-8-sig strips BOM automatically)
+        encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
         content = None
 
         for enc in encodings:
@@ -843,7 +988,13 @@ class ImportService:
         return rows
 
     def _parse_excel(self, file_path: str) -> List[Dict[str, Any]]:
-        """Parse arquivo Excel."""
+        """Parse arquivo Excel (.xlsx ou .xls)."""
+        import os
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == '.xls':
+            return self._parse_xls(file_path)
+
         from openpyxl import load_workbook
 
         wb = load_workbook(file_path, read_only=True, data_only=True)
@@ -868,6 +1019,35 @@ class ImportService:
                 result.append(row_dict)
 
         wb.close()
+        return result
+
+    def _parse_xls(self, file_path: str) -> List[Dict[str, Any]]:
+        """Parse arquivo Excel .xls (formato antigo)."""
+        import xlrd
+
+        wb = xlrd.open_workbook(file_path)
+        ws = wb.sheet_by_index(0)
+
+        if ws.nrows == 0:
+            return []
+
+        # Primeira linha como cabeçalho
+        headers = [
+            str(ws.cell_value(0, j)).strip() if ws.cell_value(0, j) else f'col_{j}'
+            for j in range(ws.ncols)
+        ]
+
+        # Converter para dicionários
+        result = []
+        for i in range(1, ws.nrows):
+            row_vals = [ws.cell_value(i, j) for j in range(ws.ncols)]
+            if any(v is not None and v != '' for v in row_vals):
+                row_dict = {
+                    headers[j]: row_vals[j] if row_vals[j] != '' else None
+                    for j in range(len(headers))
+                }
+                result.append(row_dict)
+
         return result
 
     def _parse_pdf(self, file_path: str) -> List[Dict[str, Any]]:
