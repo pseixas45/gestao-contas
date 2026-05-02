@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código da aplicação
 COPY . .
 
-# Expor porta
+# Render injeta a porta via $PORT — usa 8000 como default local
+ENV PORT=8000
 EXPOSE 8000
 
-# Comando de inicialização
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Comando de inicialização (sem --reload em produção)
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
