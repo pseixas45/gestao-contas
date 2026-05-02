@@ -56,7 +56,14 @@ else:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base = declarative_base()
+# Se DB_SCHEMA configurado, todas as tabelas usam esse schema explicitamente.
+# Mais robusto que search_path em ambientes pgbouncer (transaction pooling).
+from sqlalchemy import MetaData
+if settings.DB_SCHEMA and (settings.DATABASE_URL.startswith("postgresql") or settings.DATABASE_URL.startswith("postgres")):
+    metadata = MetaData(schema=settings.DB_SCHEMA)
+    Base = declarative_base(metadata=metadata)
+else:
+    Base = declarative_base()
 
 
 def get_db():
