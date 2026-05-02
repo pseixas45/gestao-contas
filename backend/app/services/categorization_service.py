@@ -21,20 +21,60 @@ class TextProcessor:
 
     # Padrões comuns em extratos bancários a remover
     PATTERNS_TO_REMOVE = [
-        r'\d{2}/\d{2}',           # Datas
+        r'\d{1,2}/\d{1,2}(?:/\d{2,4})?',  # Datas (08/03, 8/3, 08/03/26)
         r'\d{2}:\d{2}',           # Horários
         r'\*+',                    # Asteriscos
-        r'\d{4,}',                 # Números longos (cartão, conta)
+        r'\.{2,}',                 # Reticências (...)
+        r'\d{3,}',                 # Números longos (3+ dígitos: cartão, conta, agência)
         r'R\$[\d.,]+',             # Valores monetários
         r'BRL[\d.,]+',
     ]
 
-    # Palavras a ignorar
+    # Palavras a ignorar (bancárias genéricas + linguísticas)
     STOP_WORDS = {
+        # Linguísticas
         'de', 'do', 'da', 'dos', 'das', 'em', 'na', 'no',
         'para', 'por', 'com', 'sem', 'sobre', 'entre',
-        'ltda', 'sa', 'me', 'eireli', 'ss'
+        'ltda', 'sa', 'me', 'eireli', 'ss',
+        # Bancárias genéricas (não trazem significado de categoria)
+        'pix', 'transf', 'transferencia',
+        'pag', 'pagto', 'pagamento', 'pagamentos',
+        'tit', 'titulo', 'boleto',
+        'int', 'sispag', 'qrs',
+        'ted', 'doc', 'cred', 'deb', 'debito', 'credito',
+        'compra', 'venda',
+        'banco', 'bco',
+        'lanc', 'lancamento',
+        'mov', 'movimentacao',
+        'recebido', 'enviado', 'envio',
+        'estorno', 'devolucao',
+        'autoriz', 'aut',
+        # Curtas comuns
+        'co', 'pg', 'op', 'rec',
     }
+
+    # Prefixos a remover do INÍCIO da descrição (em ordem)
+    GENERIC_PREFIXES = [
+        'pix transf',
+        'pix qrs',
+        'pix enviado',
+        'pix recebido',
+        'pag boleto',
+        'pag tit int',
+        'pag tit',
+        'pag cred',
+        'sispag pix',
+        'sispag',
+        'int pag tit',
+        'int pag',
+        'tit pag tit',
+        'tit pag',
+        'da ',
+        'rend pago',
+        'deb autor',
+        'deb auto',
+        'op rec ext',
+    ]
 
     def normalize(self, text: str) -> str:
         """
@@ -42,11 +82,17 @@ class TextProcessor:
 
         - Remove acentos
         - Converte para minúsculas
-        - Remove padrões irrelevantes
-        - Remove stopwords
+        - Remove padrões irrelevantes (datas, números, reticências)
+        - Remove stopwords (incluindo termos bancários genéricos)
         """
         if not text:
             return ""
+
+        # Tentar corrigir double-encoded UTF-8 (mojibake)
+        try:
+            text = text.encode('latin-1').decode('utf-8')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
 
         # Minúsculas
         text = text.lower()
@@ -71,6 +117,32 @@ class TextProcessor:
 
         return text
 
+    def extract_entity(self, text: str) -> str:
+        """
+        Extrai a entidade-chave da descrição (parte significativa após remover ruído bancário).
+
+        Exemplos:
+          'PIX TRANSF Antônia08/03' -> 'antonia'
+          'PIX TRANSF FISCHI CO'    -> 'fischi'
+          'PAG BOLETO CONDOMINIO EDIFICIO AVIS RARA' -> 'condominio edificio avis rara'
+          'DA CLARO CELULAR 52988'  -> 'claro celular'
+
+        Retorna string vazia se não conseguir extrair.
+        """
+        normalized = self.normalize(text)
+        if not normalized:
+            return ""
+
+        # Remover prefixos genéricos (já cobertos pela stopword, mas garantir)
+        for prefix in self.GENERIC_PREFIXES:
+            # Os prefixos já passaram pela normalização (sem stopwords),
+            # então comparar com versão sem stopwords
+            prefix_norm = ' '.join(w for w in prefix.split() if w not in self.STOP_WORDS and len(w) > 1)
+            if prefix_norm and normalized.startswith(prefix_norm + ' '):
+                normalized = normalized[len(prefix_norm):].strip()
+
+        return normalized
+
 
 class CategorizationService:
     """Serviço híbrido de categorização de transações."""
@@ -93,7 +165,7 @@ class CategorizationService:
             Tuple[category_id, confidence, method]
             - category_id: ID da categoria ou None
             - confidence: 0.0 a 1.0
-            - method: 'rule', 'history', 'history_prefix', 'history_similar', 'none'
+            - method: 'rule', 'history', 'history_entity', 'history_prefix', 'history_similar', 'none'
         """
         normalized = self.text_processor.normalize(description)
 
@@ -107,17 +179,79 @@ class CategorizationService:
         if category_id and confidence >= self.MIN_CONFIDENCE:
             return category_id, confidence, 'history'
 
-        # 3. Tentar matching por prefixo (primeiras 2 palavras significativas)
+        # 3. Tentar match por entidade extraída (ex: "antonia", "fischi")
+        category_id, confidence = self._match_by_entity(description)
+        if category_id and confidence >= self.MIN_CONFIDENCE:
+            return category_id, confidence, 'history_entity'
+
+        # 4. Tentar matching por prefixo (primeiras 2 palavras significativas)
         category_id, confidence = self._match_by_prefix(normalized)
         if category_id and confidence >= self.MIN_CONFIDENCE:
             return category_id, confidence, 'history_prefix'
 
-        # 4. Tentar histórico similar (Jaccard token similarity)
+        # 5. Tentar histórico similar (Jaccard token similarity)
         category_id, confidence = self._match_history_similar(normalized)
         if category_id and confidence >= 0.50:
             return category_id, confidence, 'history_similar'
 
         return None, 0.0, 'none'
+
+    def _match_by_entity(
+        self,
+        description: str
+    ) -> Tuple[Optional[int], float]:
+        """
+        Match por entidade extraída.
+
+        Pega a entidade-chave (ex: 'antonia') e busca histórico cuja entidade
+        também seja igual. Se >=80% das ocorrências apontam pra mesma categoria,
+        retorna essa categoria.
+        """
+        entity = self.text_processor.extract_entity(description)
+        if not entity or len(entity) < 3:
+            return None, 0.0
+
+        # Buscar todos os históricos cuja descrição normalizada CONTENHA a entidade
+        # (ela pode estar embutida em descrições mais longas)
+        candidates = (
+            self.db.query(CategorizationHistory)
+            .filter(CategorizationHistory.description_normalized.contains(entity))
+            .all()
+        )
+
+        if not candidates:
+            return None, 0.0
+
+        # Filtrar apenas os candidatos cuja ENTIDADE realmente bate
+        matching = []
+        for c in candidates:
+            cand_entity = self.text_processor.extract_entity(c.description_normalized)
+            if cand_entity and (cand_entity == entity or
+                                cand_entity.startswith(entity + ' ') or
+                                entity.startswith(cand_entity + ' ')):
+                matching.append(c)
+
+        if not matching:
+            return None, 0.0
+
+        # Agrupar por categoria (peso = times_used)
+        from collections import Counter
+        weights = Counter()
+        for c in matching:
+            weights[c.category_id] += c.times_used
+
+        if not weights:
+            return None, 0.0
+
+        total = sum(weights.values())
+        best_cat, best_count = weights.most_common(1)[0]
+        agreement = best_count / total
+
+        if agreement >= 0.80:
+            confidence = min(0.92, 0.78 + (agreement - 0.80) * 0.70)
+            return best_cat, confidence
+
+        return None, 0.0
 
     def _match_rules(self, text: str) -> Optional[int]:
         """Aplica regras manuais em ordem de prioridade."""

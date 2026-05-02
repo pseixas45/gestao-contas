@@ -31,3 +31,21 @@ NUL
 Userspaulogestao-contastoken.json
 check.json
 metrics/
+
+# Environment variables (contém credenciais!)
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.local.example
+
+# Dados pessoais (não commitar extratos bancários)
+extratos/
+projecao_err.html
+
+# Build artifacts
+*.tsbuildinfo
+.next/
+
+# Plans / scripts temporários
+.claude-plans/

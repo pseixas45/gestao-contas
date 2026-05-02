@@ -55,6 +55,9 @@ class ColumnDetector:
     ]
 
     DESCRIPTION_COLUMN_NAMES = [
+        # 'titulo' antes de 'descricao' porque alguns bancos (C6) usam
+        # 'Descrição' como tipo genérico e 'Título' com o detalhe completo.
+        'titulo', 'título', 'title',
         'descricao', 'description', 'desc', 'historico', 'lancamento',
         'memo', 'referencia', 'observacao', 'detalhes', 'descrição'
     ]
@@ -68,6 +71,21 @@ class ColumnDetector:
     VALOR_BRL_NAMES = ['valor r$', 'valor_r$', 'valor_brl', 'brl', 'reais', 'valor reais', 'r$', 'valor (r$)', 'valor(r$)']
     VALOR_USD_NAMES = ['valor us$', 'valor_us$', 'valor_usd', 'usd', 'dolar', 'dollar', 'valor dolar', 'us$', 'valor (us$)', 'valor(us$)', 'valor (usd)']
     VALOR_EUR_NAMES = ['valor eur', 'valor_eur', 'eur', 'euro', 'valor euro', 'eur$', 'valor (eur)', 'valor(eur)', '€']
+
+    # Colunas separadas de entrada/saída (C6, Nubank, etc.)
+    CREDIT_COLUMN_NAMES = [
+        'entrada', 'entrada(r$)', 'entrada (r$)', 'entradas',
+        'credito', 'crédito', 'creditos', 'créditos',
+        'credit', 'credits', 'haver',
+        'recebido', 'valor recebido',
+    ]
+
+    DEBIT_COLUMN_NAMES = [
+        'saida', 'saída', 'saida(r$)', 'saída(r$)', 'saida (r$)', 'saída (r$)', 'saidas', 'saídas',
+        'debito', 'débito', 'debitos', 'débitos',
+        'debit', 'debits', 'deve',
+        'enviado', 'valor enviado',
+    ]
 
     BALANCE_COLUMN_NAMES = [
         'saldo', 'balance', 'saldo_final', 'saldo_apos',
@@ -109,26 +127,79 @@ class ColumnDetector:
         date_col = self._detect_column(columns, sample_rows, self.DATE_COLUMN_NAMES, 'date')
         desc_col = self._detect_column(columns, sample_rows, self.DESCRIPTION_COLUMN_NAMES, 'text')
 
+        # Se há múltiplas colunas candidatas a descrição, preferir a com texto mais longo
+        # (ex: C6 tem 'Título' com detalhe e 'Descrição' com tipo genérico)
+        desc_candidates = []
+        for col in columns:
+            col_lower = col.lower().strip().replace(' ', '_').replace('ã', 'a').replace('ç', 'c').replace('ó', 'o').replace('í', 'i')
+            for hint in self.DESCRIPTION_COLUMN_NAMES:
+                hint_norm = hint.replace(' ', '_').replace('ã', 'a').replace('ç', 'c').replace('ó', 'o').replace('í', 'i')
+                if col_lower == hint_norm or hint_norm in col_lower:
+                    desc_candidates.append(col)
+                    break
+        if len(desc_candidates) > 1:
+            # Calcular tamanho médio do texto em cada candidata
+            best_col = desc_candidates[0]
+            best_avg = 0
+            for col in desc_candidates:
+                values = [str(r.get(col, '') or '') for r in sample_rows]
+                avg = sum(len(v) for v in values) / max(len(values), 1)
+                if avg > best_avg:
+                    best_avg = avg
+                    best_col = col
+            desc_col = best_col
+
         # Detectar colunas de valor (multi-moeda)
         amount_col = self._detect_column(columns, sample_rows, self.AMOUNT_COLUMN_NAMES, 'number')
         valor_brl_col = self._detect_column(columns, sample_rows, self.VALOR_BRL_NAMES, 'number')
         valor_usd_col = self._detect_column(columns, sample_rows, self.VALOR_USD_NAMES, 'number')
         valor_eur_col = self._detect_column(columns, sample_rows, self.VALOR_EUR_NAMES, 'number')
 
+        # Detectar colunas separadas de Entrada/Saída — usar match EXATO apenas
+        # (evita "valor" bater como substring de "valor recebido")
+        credit_col = self._detect_column_strict(columns, self.CREDIT_COLUMN_NAMES)
+        debit_col = self._detect_column_strict(columns, self.DEBIT_COLUMN_NAMES)
+
+        # Credit + Debit só são úteis se forem AMBOS detectados (caso contrário não consegue consolidar)
+        if not (credit_col and debit_col):
+            credit_col = None
+            debit_col = None
+
+        # Se detectou credit+debit, limpar amount_col / valor_brl_col que possam estar duplicando
+        if credit_col and debit_col:
+            if valor_brl_col in (credit_col, debit_col):
+                valor_brl_col = None
+            if amount_col in (credit_col, debit_col):
+                amount_col = None
+
         balance_col = self._detect_column(columns, sample_rows, self.BALANCE_COLUMN_NAMES, 'number')
         bank_col = self._detect_column(columns, sample_rows, self.BANK_COLUMN_NAMES, 'text')
         account_col = self._detect_column(columns, sample_rows, self.ACCOUNT_COLUMN_NAMES, 'text')
         category_col = self._detect_column(columns, sample_rows, self.CATEGORY_COLUMN_NAMES, 'text')
-        card_payment_col = self._detect_column(columns, sample_rows, self.CARD_PAYMENT_DATE_NAMES, 'date')
+        # Card payment date: usa match estrito (evita 'data' bater como substring de 'data pagto cartao')
+        card_payment_col = self._detect_column_strict(columns, self.CARD_PAYMENT_DATE_NAMES)
+        # Se card_payment_col foi detectado mas é a MESMA coluna de date_col, descartar
+        # (coluna de data da compra não é data de pagamento da fatura)
+        if card_payment_col and card_payment_col == date_col:
+            card_payment_col = None
         installment_col = self._detect_column(columns, sample_rows, self.INSTALLMENT_COLUMN_NAMES, 'text')
+
+        # Se temos credit+debit, não precisamos de amount fallback posicional
+        amount_fallback = None
+        if not (credit_col and debit_col):
+            amount_fallback = amount_col or (columns[2] if len(columns) > 2 else None)
+        else:
+            amount_fallback = amount_col  # mantém só se detectado por nome
 
         return ColumnMapping(
             date_column=date_col or columns[0],
             description_column=desc_col or (columns[1] if len(columns) > 1 else columns[0]),
-            amount_column=amount_col or (columns[2] if len(columns) > 2 else None),
+            amount_column=amount_fallback,
             valor_brl_column=valor_brl_col,
             valor_usd_column=valor_usd_col,
             valor_eur_column=valor_eur_col,
+            credit_column=credit_col,
+            debit_column=debit_col,
             balance_column=balance_col,
             bank_column=bank_col,
             account_column=account_col,
@@ -136,6 +207,38 @@ class ColumnDetector:
             card_payment_date_column=card_payment_col,
             installment_column=installment_col
         )
+
+    def _detect_column_strict(
+        self,
+        columns: List[str],
+        name_hints: List[str]
+    ) -> Optional[str]:
+        """Detecta coluna com match EXATO de nome apenas (sem substring).
+
+        Usado para Credit/Debit — onde substring matching é perigoso (ex: 'valor'
+        em 'valor recebido' geraria falso positivo).
+        """
+        for col in columns:
+            col_norm = col.lower().strip()
+            # Normalizar removendo acentos comuns
+            col_norm = (col_norm
+                .replace('ã', 'a').replace('á', 'a').replace('â', 'a').replace('à', 'a')
+                .replace('é', 'e').replace('ê', 'e')
+                .replace('í', 'i').replace('î', 'i')
+                .replace('ó', 'o').replace('ô', 'o').replace('õ', 'o')
+                .replace('ú', 'u').replace('û', 'u')
+                .replace('ç', 'c'))
+            for hint in name_hints:
+                hint_norm = (hint.lower()
+                    .replace('ã', 'a').replace('á', 'a').replace('â', 'a').replace('à', 'a')
+                    .replace('é', 'e').replace('ê', 'e')
+                    .replace('í', 'i').replace('î', 'i')
+                    .replace('ó', 'o').replace('ô', 'o').replace('õ', 'o')
+                    .replace('ú', 'u').replace('û', 'u')
+                    .replace('ç', 'c'))
+                if col_norm == hint_norm:
+                    return col
+        return None
 
     def _detect_column(
         self,
@@ -516,6 +619,20 @@ class ImportService:
         valor_usd_str = row.get(mapping.valor_usd_column) if mapping.valor_usd_column else None
         valor_eur_str = row.get(mapping.valor_eur_column) if mapping.valor_eur_column else None
 
+        # Consolidar Entrada/Saída em amount_str se detectadas
+        # (formato C6, Nubank: duas colunas separadas com valores absolutos)
+        if (mapping.credit_column or mapping.debit_column) and not amount_str:
+            credit_raw = row.get(mapping.credit_column) if mapping.credit_column else None
+            debit_raw = row.get(mapping.debit_column) if mapping.debit_column else None
+            credit_val = self._parse_amount(credit_raw) if credit_raw and str(credit_raw).strip() else Decimal("0")
+            debit_val = self._parse_amount(debit_raw) if debit_raw and str(debit_raw).strip() else Decimal("0")
+            credit_val = credit_val if credit_val is not None else Decimal("0")
+            debit_val = debit_val if debit_val is not None else Decimal("0")
+            # amount = entrada - saída (valores absolutos no arquivo)
+            consolidated = credit_val - abs(debit_val)
+            if consolidated != 0:
+                amount_str = str(consolidated)
+
         # Data de pagamento do cartão (override global tem prioridade)
         card_payment_str = row.get(mapping.card_payment_date_column) if mapping.card_payment_date_column else None
         # Se há override do formulário, usar ele
@@ -534,11 +651,16 @@ class ImportService:
             }
 
         # Pelo menos um valor deve estar preenchido
+        # (credit/debit já foram consolidados em amount_str acima)
+        credit_raw_check = row.get(mapping.credit_column) if mapping.credit_column else None
+        debit_raw_check = row.get(mapping.debit_column) if mapping.debit_column else None
         has_any_amount = any([
             amount_str and str(amount_str).strip(),
             valor_brl_str and str(valor_brl_str).strip(),
             valor_usd_str and str(valor_usd_str).strip(),
-            valor_eur_str and str(valor_eur_str).strip()
+            valor_eur_str and str(valor_eur_str).strip(),
+            credit_raw_check and str(credit_raw_check).strip(),
+            debit_raw_check and str(debit_raw_check).strip(),
         ])
 
         if not has_any_amount:
@@ -588,6 +710,31 @@ class ImportService:
 
         # Parse amount genérico
         amount_generic = self._parse_amount(amount_str) if amount_str and str(amount_str).strip() else None
+
+        # AUTO-INVERSÃO PARA CARTÃO DE CRÉDITO:
+        # Em arquivos de fatura de cartão, os sinais são "do ponto de vista do cartão":
+        #   - Compras: positivas (aumentam a fatura)
+        #   - Pagamentos/estornos: negativos (reduzem a fatura)
+        # No nosso sistema, queremos do ponto de vista do "saldo (dívida) do cartão":
+        #   - Compras devem ser NEGATIVAS (aumentam dívida)
+        #   - Pagamentos devem ser POSITIVOS (reduzem dívida)
+        # Solução: inverter TODOS os sinais quando a conta é cartão.
+        # Não aplicar quando já estamos usando credit/debit consolidado (formato
+        # com colunas separadas — esse já vem com sinais corretos).
+        is_credit_card = (
+            getattr(account, 'account_type', None) and
+            str(account.account_type).lower().endswith('credit_card')
+        )
+        used_credit_debit = bool(mapping.credit_column or mapping.debit_column)
+        if is_credit_card and not used_credit_debit:
+            if valor_brl is not None:
+                valor_brl = -valor_brl
+            if valor_usd is not None:
+                valor_usd = -valor_usd
+            if valor_eur is not None:
+                valor_eur = -valor_eur
+            if amount_generic is not None:
+                amount_generic = -amount_generic
 
         # Se só temos amount genérico e não temos valores específicos, usar como valor da moeda da conta
         if amount_generic is not None and not any([valor_brl, valor_usd, valor_eur]):

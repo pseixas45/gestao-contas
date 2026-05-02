@@ -16,6 +16,11 @@ class ColumnMapping(BaseModel):
     valor_usd_column: Optional[str] = None  # Valor US$
     valor_eur_column: Optional[str] = None  # Valor EUR
 
+    # Colunas separadas de entrada/saída (formato C6, Nubank, etc.)
+    # Quando presentes, amount = credit_column - debit_column
+    credit_column: Optional[str] = None  # Entrada / Crédito (positivo)
+    debit_column: Optional[str] = None   # Saída / Débito (positivo, será subtraído)
+
     balance_column: Optional[str] = None
 
     # Para carga histórica com banco e conta no arquivo

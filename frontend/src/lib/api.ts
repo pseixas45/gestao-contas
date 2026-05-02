@@ -341,6 +341,11 @@ export const importsApi = {
     });
     return response.data;
   },
+
+  pendingCount: async (): Promise<{ pending_count: number }> => {
+    const response = await api.get('/imports/pending-count');
+    return response.data;
+  },
 };
 
 // Projections

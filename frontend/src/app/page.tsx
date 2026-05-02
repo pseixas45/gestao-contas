@@ -6,7 +6,7 @@ import MainLayout from '@/components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import StatCard from '@/components/ui/StatCard';
 import { SkeletonCard } from '@/components/ui/Skeleton';
-import { reportsApi, projectionsApi, accountsApi } from '@/lib/api';
+import { reportsApi, projectionsApi, accountsApi, importsApi } from '@/lib/api';
 import { formatCurrency, getAccountTypeLabel } from '@/lib/utils';
 import {
   Wallet,
@@ -77,6 +77,12 @@ export default function DashboardPage() {
   const { data: summary, isLoading } = useQuery({
     queryKey: ['dashboard-summary', selectedMonth],
     queryFn: () => reportsApi.dashboardSummary(selectedMonth),
+    refetchInterval: 60000,
+  });
+
+  const { data: pendingImports } = useQuery({
+    queryKey: ['imports-pending-count'],
+    queryFn: () => importsApi.pendingCount(),
     refetchInterval: 60000,
   });
 
@@ -179,6 +185,25 @@ export default function DashboardPage() {
             </Link>
           )}
         </div>
+
+        {/* Pending imports warning */}
+        {pendingImports && pendingImports.pending_count > 0 && (
+          <Link
+            href="/importar/historico"
+            className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors"
+          >
+            <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-900">
+                {pendingImports.pending_count} importação{pendingImports.pending_count !== 1 ? 'ões' : ''} pendente{pendingImports.pending_count !== 1 ? 's' : ''}
+              </p>
+              <p className="text-xs text-amber-700">
+                Você fez upload mas não concluiu o processamento. Clique para ver e finalizar.
+              </p>
+            </div>
+            <span className="text-xs text-amber-700 font-medium">Ver →</span>
+          </Link>
+        )}
 
         {/* StatCards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -42,12 +42,16 @@ interface Filters {
 export default function RelatoriosPage() {
   const queryClient = useQueryClient();
   const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const defaultStart = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  // Período padrão: 4 últimos meses fechados (até mês atual - 1)
+  const defaultEndDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const defaultStartDate = new Date(defaultEndDate.getFullYear(), defaultEndDate.getMonth() - 3, 1);
+  const fmtYM = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const defaultEnd = fmtYM(defaultEndDate);
+  const defaultStart = fmtYM(defaultStartDate);
 
   const [filters, setFilters] = useState<Filters>({
     start_month: defaultStart,
-    end_month: currentMonth,
+    end_month: defaultEnd,
     currency: 'BRL',
     account_ids: [],
     category_ids: [],
@@ -173,6 +177,13 @@ export default function RelatoriosPage() {
       if (typeof parsed.account_ids === 'string') {
         parsed.account_ids = parsed.account_ids ? parsed.account_ids.split(',').map(Number) : [];
       }
+      // Período: sempre 4 últimos meses fechados (até mês atual - 1)
+      const now = new Date();
+      const endDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const startDate = new Date(endDate.getFullYear(), endDate.getMonth() - 3, 1);
+      const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      parsed.start_month = fmt(startDate);
+      parsed.end_month = fmt(endDate);
       setFilters(parsed as Filters);
       setShowLoadMenu(false);
     } catch {}

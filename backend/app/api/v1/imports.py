@@ -211,11 +211,22 @@ async def analyze_import(
             elif mapping.valor_eur_column:
                 amount_str = row.get(mapping.valor_eur_column)
 
-            if amount_str is None:
-                error_count += 1
-                continue
+            # Consolidar Entrada/Saída em valor único (formato C6, Nubank)
+            amount = None
+            if amount_str is not None:
+                amount = service._parse_amount(amount_str)
 
-            amount = service._parse_amount(amount_str)
+            if amount is None and (mapping.credit_column or mapping.debit_column):
+                credit_raw = row.get(mapping.credit_column) if mapping.credit_column else None
+                debit_raw = row.get(mapping.debit_column) if mapping.debit_column else None
+                credit_val = service._parse_amount(credit_raw) if credit_raw and str(credit_raw).strip() else Decimal("0")
+                debit_val = service._parse_amount(debit_raw) if debit_raw and str(debit_raw).strip() else Decimal("0")
+                credit_val = credit_val if credit_val is not None else Decimal("0")
+                debit_val = debit_val if debit_val is not None else Decimal("0")
+                consolidated = credit_val - abs(debit_val)
+                if consolidated != 0:
+                    amount = consolidated
+
             if amount is None:
                 error_count += 1
                 continue
@@ -519,6 +530,18 @@ def list_batches(
 
     batches = query.order_by(ImportBatch.imported_at.desc()).limit(100).all()
     return batches
+
+
+@router.get("/pending-count")
+def get_pending_count(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Contar batches em status PENDING (uploaded mas não processados)."""
+    count = db.query(ImportBatch).filter(
+        ImportBatch.status == ImportStatus.PENDING
+    ).count()
+    return {"pending_count": count}
 
 
 @router.get("/batches/{batch_id}", response_model=ImportBatchResponse)

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -14,7 +14,24 @@ if settings.DATABASE_URL.startswith("sqlite"):
         },
         echo=settings.DEBUG
     )
+elif settings.DATABASE_URL.startswith("postgresql") or settings.DATABASE_URL.startswith("postgres"):
+    # PostgreSQL (Supabase, Render, etc.) com pool pre-ping para reconexões
+    pg_kwargs = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+        "echo": settings.DEBUG,
+    }
+
+    # Se DB_SCHEMA configurado, setar search_path via connect_args
+    # (mais robusto que event listener — aplica em TODA nova conexão do pool).
+    if settings.DB_SCHEMA:
+        pg_kwargs["connect_args"] = {
+            "options": f"-csearch_path={settings.DB_SCHEMA},public"
+        }
+
+    engine = create_engine(settings.DATABASE_URL, **pg_kwargs)
 else:
+    # Fallback genérico (MySQL, etc.)
     engine = create_engine(
         settings.DATABASE_URL,
         pool_pre_ping=True,
@@ -34,3 +51,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_schema():
+    """Cria o schema configurado se não existir (Postgres only)."""
+    if not settings.DB_SCHEMA:
+        return
+    if not (settings.DATABASE_URL.startswith("postgresql") or settings.DATABASE_URL.startswith("postgres")):
+        return
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{settings.DB_SCHEMA}"'))
+        conn.commit()

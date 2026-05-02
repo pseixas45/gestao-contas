@@ -43,7 +43,14 @@ export default function LoginPage() {
         router.push('/');
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Erro ao processar solicitação');
+      const detail = err.response?.data?.detail;
+      let message = 'Erro ao processar solicitação';
+      if (typeof detail === 'string') {
+        message = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        message = detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ');
+      }
+      setError(message);
     } finally {
       setIsLoading(false);
     }
