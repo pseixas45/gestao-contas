@@ -15,19 +15,34 @@ if settings.DATABASE_URL.startswith("sqlite"):
         echo=settings.DEBUG
     )
 elif settings.DATABASE_URL.startswith("postgresql") or settings.DATABASE_URL.startswith("postgres"):
-    # PostgreSQL (Supabase, Render, etc.) com pool pre-ping para reconexões
+    # PostgreSQL (Supabase, Render, etc.)
+    # Detectar pooler do Supabase (pgbouncer) — precisa config especial:
+    #   - Sem prepared statement cache
+    #   - NullPool (deixa pgbouncer fazer pooling, não SQLAlchemy)
+    is_pgbouncer = "pooler.supabase.com" in settings.DATABASE_URL or "pgbouncer" in settings.DATABASE_URL
+
     pg_kwargs = {
-        "pool_pre_ping": True,
-        "pool_recycle": 300,
         "echo": settings.DEBUG,
     }
 
-    # Se DB_SCHEMA configurado, setar search_path via connect_args
-    # (mais robusto que event listener — aplica em TODA nova conexão do pool).
+    if is_pgbouncer:
+        # pgbouncer transaction mode: cada query pode pegar conexão diferente.
+        # Desabilitar prepared statements e deixar pgbouncer cuidar do pool.
+        from sqlalchemy.pool import NullPool
+        pg_kwargs["poolclass"] = NullPool
+    else:
+        pg_kwargs["pool_pre_ping"] = True
+        pg_kwargs["pool_recycle"] = 300
+
+    # Connect args — search_path do schema + opções pgbouncer-friendly
+    connect_args = {}
     if settings.DB_SCHEMA:
-        pg_kwargs["connect_args"] = {
-            "options": f"-csearch_path={settings.DB_SCHEMA},public"
-        }
+        connect_args["options"] = f"-csearch_path={settings.DB_SCHEMA},public"
+    if is_pgbouncer:
+        # Desabilitar prepared statements (incompatível com pgbouncer transaction)
+        connect_args["prepare_threshold"] = None
+    if connect_args:
+        pg_kwargs["connect_args"] = connect_args
 
     engine = create_engine(settings.DATABASE_URL, **pg_kwargs)
 else:
