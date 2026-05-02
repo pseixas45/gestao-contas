@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import MainLayout from '@/components/layout/MainLayout';
@@ -286,7 +286,7 @@ function CreateModal({ accounts, categories, onSave, onClose, isLoading, isError
   );
 }
 
-export default function TransacoesPage() {
+function TransacoesPageContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [page, setPage] = useState(1);
@@ -692,5 +692,13 @@ export default function TransacoesPage() {
         />
       )}
     </MainLayout>
+  );
+}
+
+export default function TransacoesPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-slate-500">Carregando...</div>}>
+      <TransacoesPageContent />
+    </Suspense>
   );
 }
