@@ -15,6 +15,7 @@ import {
   PiggyBank,
   Settings,
   BookOpen,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -33,9 +34,11 @@ interface NavSection {
 interface SidebarProps {
   pendingCount?: number;
   onLogout: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
-export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
+export default function Sidebar({ pendingCount = 0, onLogout, isOpen = false, onClose }: SidebarProps) {
   const pathname = usePathname();
 
   const sections: NavSection[] = [
@@ -71,9 +74,28 @@ export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
   ];
 
   return (
-    <aside className="w-[220px] bg-white border-r border-slate-200/80 min-h-screen flex flex-col">
+    <>
+      {/* Backdrop em mobile quando drawer aberto */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-30 md:hidden"
+          onClick={onClose}
+          aria-label="Fechar menu"
+        />
+      )}
+
+      <aside
+        className={cn(
+          'w-[220px] bg-white border-r border-slate-200/80 min-h-screen flex flex-col z-40',
+          // Mobile: drawer fixo que entra/sai pela esquerda
+          'fixed inset-y-0 left-0 transition-transform duration-200 ease-out md:transition-none',
+          isOpen ? 'translate-x-0' : '-translate-x-full',
+          // Desktop: sempre visível, posição estática
+          'md:static md:translate-x-0'
+        )}
+      >
       {/* Logo */}
-      <div className="px-5 py-5 border-b border-slate-100">
+      <div className="px-5 py-5 border-b border-slate-100 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center">
             <Wallet className="h-4 w-4 text-white" />
@@ -83,6 +105,14 @@ export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
             <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">de Contas</p>
           </div>
         </div>
+        {/* Fechar drawer em mobile */}
+        <button
+          onClick={onClose}
+          className="md:hidden p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+          aria-label="Fechar menu"
+        >
+          <X className="h-4 w-4 text-slate-500" />
+        </button>
       </div>
 
       {/* Navegação */}
@@ -103,11 +133,12 @@ export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
                   <li key={item.href}>
                     <Link
                       href={item.href}
+                      onClick={onClose}
                       className={cn(
                         'flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-default',
                         isActive
                           ? 'bg-primary-50 text-primary-700 font-medium'
-                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 active:bg-slate-100'
                       )}
                     >
                       <span className={cn(
@@ -141,6 +172,7 @@ export default function Sidebar({ pendingCount = 0, onLogout }: SidebarProps) {
           <span>Sair</span>
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
