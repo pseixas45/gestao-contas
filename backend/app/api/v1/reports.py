@@ -222,10 +222,21 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
         month_start = today.replace(day=1)
     current_month = month_start.strftime("%Y-%m")
 
+    # === Pré-carregar lookups (evitar N+1) ===
+    # Categorias: dict id -> (name, color, type_str)
+    all_categories = db.query(Category).all()
+    cat_by_id = {
+        c.id: (c.name, c.color, str(c.type).replace("CategoryType.", "").lower() if c.type else None)
+        for c in all_categories
+    }
+    # Bancos: dict id -> (name, color)
+    all_banks = db.query(Bank).all()
+    bank_by_id = {b.id: (b.name, b.color) for b in all_banks}
+
     # 1. Contas e saldos
     accounts = db.query(BankAccount).filter(BankAccount.is_active == True).all()
 
-    # Buscar últimas taxas de câmbio do cache
+    # Buscar últimas taxas de câmbio do cache (1 query por moeda)
     from app.models.exchange_rate import ExchangeRate as ExRate
     latest_rates: dict[str, Decimal] = {}
     for cur in ["USD", "EUR"]:
@@ -247,12 +258,12 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
         else:
             bal_brl = balance * latest_rates.get(cur, Decimal("1"))
         total_brl += bal_brl
-        bank = db.query(Bank).filter(Bank.id == acc.bank_id).first()
+        bank_info = bank_by_id.get(acc.bank_id, ("", None))
         account_balances.append(DashboardAccountBalance(
             account_id=acc.id,
             account_name=acc.name,
-            bank_name=bank.name if bank else "",
-            bank_color=bank.color if bank else None,
+            bank_name=bank_info[0],
+            bank_color=bank_info[1],
             currency=cur,
             balance=balance,
             balance_brl=bal_brl,
@@ -271,26 +282,26 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
     else:
         # Fallback: excluir Aplicação(1), Casamento(2), Desp Trabalho(7), Divórcio(8),
         # Joceline(13), Reembolso Despesas(18), Resgate(22), Transferência(30)
-        all_cat_ids = {c.id for c in db.query(Category.id).all()}
         excluded = {1, 2, 7, 8, 13, 18, 22, 30}
-        dashboard_cat_ids = all_cat_ids - excluded
+        dashboard_cat_ids = set(cat_by_id.keys()) - excluded
 
     month_end = (month_start + relativedelta(months=1)) - relativedelta(days=1)
-    month_transactions = db.query(Transaction).filter(
+    # Buscar só os campos necessários para evitar overhead de hidratar todos os campos
+    month_txn_rows = db.query(Transaction.category_id, Transaction.amount_brl).filter(
         Transaction.date >= month_start,
         Transaction.date <= month_end,
     ).all()
 
     month_income = Decimal("0")
     month_expenses = Decimal("0")
-    for t in month_transactions:
-        if t.category_id and t.category_id not in dashboard_cat_ids:
+    for cat_id, amt_brl in month_txn_rows:
+        if not cat_id or cat_id not in dashboard_cat_ids:
             continue
-        if not t.category_id:
+        cat_data = cat_by_id.get(cat_id)
+        if not cat_data:
             continue
-        amt = t.amount_brl or Decimal("0")
-        cat = db.query(Category).filter(Category.id == t.category_id).first()
-        cat_type = str(cat.type).replace("CategoryType.", "").lower() if cat and cat.type else None
+        amt = amt_brl or Decimal("0")
+        cat_type = cat_data[2]
         if cat_type == "income":
             month_income += amt
         elif cat_type == "expense":
@@ -307,59 +318,57 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
 
     # 4. Top 5 categorias de despesa do mês (usando filtro Dashboard)
     cat_totals: dict[int, Decimal] = {}
-    cat_info: dict[int, tuple] = {}
-    for t in month_transactions:
-        if t.category_id and t.category_id in dashboard_cat_ids:
-            cat = db.query(Category).filter(Category.id == t.category_id).first()
-            if cat and cat.type == "expense":
-                amt = t.amount_brl or Decimal("0")
-                cat_totals[cat.id] = cat_totals.get(cat.id, Decimal("0")) + amt
-                cat_info[cat.id] = (cat.name, cat.color)
+    for cat_id, amt_brl in month_txn_rows:
+        if not cat_id or cat_id not in dashboard_cat_ids:
+            continue
+        cat_data = cat_by_id.get(cat_id)
+        if cat_data and cat_data[2] == "expense":
+            cat_totals[cat_id] = cat_totals.get(cat_id, Decimal("0")) + (amt_brl or Decimal("0"))
 
     total_cat = abs(sum(cat_totals.values())) or Decimal("1")
     top_cats = sorted(cat_totals.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
     top_categories = [
         DashboardTopCategory(
             category_id=cid,
-            category_name=cat_info[cid][0],
-            category_color=cat_info[cid][1],
+            category_name=cat_by_id[cid][0],
+            category_color=cat_by_id[cid][1],
             amount=abs(amt),
             percentage=float(abs(amt) / total_cat * 100),
         )
         for cid, amt in top_cats
     ]
 
-    # 5. Evolução mensal (últimos 6 meses relativos ao mês selecionado)
+    # 5. Evolução mensal (últimos 6 meses) — UMA query agregada, sem loop por mês
+    evol_start = (month_start - relativedelta(months=5)).replace(day=1)
+    evol_end = month_end
+    evol_rows = db.query(Transaction.date, Transaction.category_id, Transaction.amount_brl).filter(
+        Transaction.date >= evol_start,
+        Transaction.date <= evol_end,
+    ).all()
+
+    monthly_buckets: dict[str, dict[str, Decimal]] = {}
+    for tdate, cat_id, amt_brl in evol_rows:
+        if not cat_id or cat_id not in dashboard_cat_ids:
+            continue
+        cat_data = cat_by_id.get(cat_id)
+        if not cat_data:
+            continue
+        m_str = tdate.strftime("%Y-%m")
+        if m_str not in monthly_buckets:
+            monthly_buckets[m_str] = {"income": Decimal("0"), "expense": Decimal("0")}
+        amt = amt_brl or Decimal("0")
+        if cat_data[2] == "income":
+            monthly_buckets[m_str]["income"] += amt
+        elif cat_data[2] == "expense":
+            monthly_buckets[m_str]["expense"] += amt
+
     monthly_evolution = []
     for i in range(5, -1, -1):
         m_date = month_start - relativedelta(months=i)
         m_str = m_date.strftime("%Y-%m")
-        m_start = m_date.replace(day=1)
-        m_end = (m_start + relativedelta(months=1)) - relativedelta(days=1)
-
-        m_txns = db.query(Transaction).filter(
-            Transaction.date >= m_start,
-            Transaction.date <= m_end,
-        ).all()
-
-        m_income = Decimal("0")
-        m_expense = Decimal("0")
-        for t in m_txns:
-            if t.category_id and t.category_id not in dashboard_cat_ids:
-                continue
-            if not t.category_id:
-                continue
-            amt = t.amount_brl or Decimal("0")
-            cat = db.query(Category).filter(Category.id == t.category_id).first()
-            cat_type = str(cat.type).replace("CategoryType.", "").lower() if cat and cat.type else None
-            if cat_type == "income":
-                m_income += amt
-            elif cat_type == "expense":
-                m_expense += amt
-
-        m_income = abs(m_income)
-        m_expense = abs(m_expense)
-
+        bucket = monthly_buckets.get(m_str, {"income": Decimal("0"), "expense": Decimal("0")})
+        m_income = abs(bucket["income"])
+        m_expense = abs(bucket["expense"])
         monthly_evolution.append(DashboardMonthEvolution(
             month=m_str,
             income=m_income,
