@@ -650,4 +650,282 @@ export const budgetsApi = {
   },
 };
 
+// Investments
+export interface AssetClass {
+  id: number;
+  code: string;
+  name: string;
+  color: string | null;
+  typical_liquidity_days: number | null;
+  risk_level: number | null;
+  description: string | null;
+}
+
+export interface Asset {
+  id: number;
+  code: string | null;
+  name: string;
+  asset_class_id: number;
+  asset_class_name: string | null;
+  asset_class_code: string | null;
+  issuer: string | null;
+  sector: string | null;
+  isin: string | null;
+  liquidity_days: number | null;
+  risk_level: number | null;
+  is_active: boolean;
+}
+
+export interface InvestmentSnapshot {
+  id: number;
+  account_id: number;
+  account_name: string | null;
+  bank_name: string | null;
+  snapshot_date: string;
+  total_value: number;
+  total_invested: number | null;
+  available_balance: number | null;
+  yield_month_pct: number | null;
+  yield_ytd_pct: number | null;
+  yield_total_pct: number | null;
+  notes: string | null;
+  positions_count: number;
+}
+
+export interface InvestmentPosition {
+  id: number;
+  asset_id: number;
+  asset_name: string | null;
+  asset_class_code: string | null;
+  value: number;
+  value_invested: number | null;
+  quantity: number | null;
+  allocation_pct: number | null;
+  yield_net_pct: number | null;
+  yield_gross_pct: number | null;
+  yield_value: number | null;
+  maturity_date: string | null;
+  contracted_rate: string | null;
+}
+
+export interface InvestmentSnapshotDetail extends InvestmentSnapshot {
+  positions: InvestmentPosition[];
+}
+
+export interface InvestmentGoal {
+  id: number;
+  type: string;
+  name: string;
+  description: string | null;
+  target_value: number | null;
+  target_class_id: number | null;
+  target_class_name: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  is_active: boolean;
+}
+
+export interface InvestmentGoalProgress extends InvestmentGoal {
+  current: number;
+  progress_pct: number;
+}
+
+export interface AllocationItem {
+  key: string | number;
+  name: string;
+  color: string | null;
+  value: number;
+  allocation_pct: number;
+}
+
+export interface PortfolioOverview {
+  total_value: number;
+  total_invested: number;
+  yield_value: number;
+  yield_pct: number;
+  monthly_change: number | null;
+  monthly_change_pct: number | null;
+  monthly_contribution: number | null;
+  accounts: Array<{
+    account_id: number;
+    account_name: string;
+    snapshot_date: string;
+    total_value: number;
+    total_invested: number;
+  }>;
+}
+
+export interface HistoryPoint {
+  date: string;
+  total_value: number;
+  total_invested: number;
+  yield_value: number;
+  monthly_change_pct: number | null;
+}
+
+export interface ExposureData {
+  inflation_pct: number;
+  currency_pct: number;
+  equity_pct: number;
+  fixed_income_pct: number;
+  crypto_pct: number;
+  private_equity_pct: number;
+}
+
+export interface LiquidityBucket {
+  bucket: string;
+  value: number;
+  pct: number;
+}
+
+export interface RiskSummary {
+  weighted_avg: number;
+  distribution: Record<string, number>;
+}
+
+export interface ContributionPoint {
+  date: string;
+  total_invested: number;
+  contribution: number | null;
+}
+
+export interface InvestmentDashboard {
+  overview: PortfolioOverview;
+  allocation_by_class: AllocationItem[];
+  allocation_by_bank: AllocationItem[];
+  history: HistoryPoint[];
+  exposure: ExposureData;
+  risk: RiskSummary;
+  liquidity: LiquidityBucket[];
+  contributions: ContributionPoint[];
+}
+
+export const investmentsApi = {
+  // Asset classes
+  listAssetClasses: async (): Promise<AssetClass[]> => {
+    const response = await api.get('/investments/asset-classes');
+    return response.data;
+  },
+
+  // Assets
+  listAssets: async (params?: { asset_class_id?: number; active_only?: boolean }): Promise<Asset[]> => {
+    const response = await api.get('/investments/assets', { params });
+    return response.data;
+  },
+
+  createAsset: async (data: Partial<Asset>): Promise<Asset> => {
+    const response = await api.post('/investments/assets', data);
+    return response.data;
+  },
+
+  updateAsset: async (id: number, data: Partial<Asset>): Promise<Asset> => {
+    const response = await api.put(`/investments/assets/${id}`, data);
+    return response.data;
+  },
+
+  // Snapshots
+  listSnapshots: async (accountId?: number): Promise<InvestmentSnapshot[]> => {
+    const response = await api.get('/investments/snapshots', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  getSnapshot: async (id: number): Promise<InvestmentSnapshotDetail> => {
+    const response = await api.get(`/investments/snapshots/${id}`);
+    return response.data;
+  },
+
+  deleteSnapshot: async (id: number): Promise<void> => {
+    await api.delete(`/investments/snapshots/${id}`);
+  },
+
+  // Positions
+  listCurrentPositions: async (accountId?: number): Promise<InvestmentPosition[]> => {
+    const response = await api.get('/investments/positions/current', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  // Goals
+  listGoals: async (activeOnly = true): Promise<InvestmentGoal[]> => {
+    const response = await api.get('/investments/goals', { params: { active_only: activeOnly } });
+    return response.data;
+  },
+
+  createGoal: async (data: Partial<InvestmentGoal>): Promise<InvestmentGoal> => {
+    const response = await api.post('/investments/goals', data);
+    return response.data;
+  },
+
+  updateGoal: async (id: number, data: Partial<InvestmentGoal>): Promise<InvestmentGoal> => {
+    const response = await api.put(`/investments/goals/${id}`, data);
+    return response.data;
+  },
+
+  deleteGoal: async (id: number): Promise<void> => {
+    await api.delete(`/investments/goals/${id}`);
+  },
+
+  goalsProgress: async (): Promise<InvestmentGoalProgress[]> => {
+    const response = await api.get('/investments/goals/progress');
+    return response.data;
+  },
+
+  // Analyses
+  dashboard: async (accountId?: number): Promise<InvestmentDashboard> => {
+    const response = await api.get('/investments/dashboard', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  overview: async (accountId?: number): Promise<PortfolioOverview> => {
+    const response = await api.get('/investments/overview', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  history: async (accountId?: number): Promise<HistoryPoint[]> => {
+    const response = await api.get('/investments/history', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  allocation: async (groupBy: 'class' | 'bank' | 'asset' = 'class', accountId?: number): Promise<AllocationItem[]> => {
+    const response = await api.get('/investments/allocation', { params: { group_by: groupBy, account_id: accountId } });
+    return response.data;
+  },
+
+  exposure: async (accountId?: number): Promise<ExposureData> => {
+    const response = await api.get('/investments/exposure', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  liquidity: async (accountId?: number): Promise<LiquidityBucket[]> => {
+    const response = await api.get('/investments/liquidity', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  risk: async (accountId?: number): Promise<RiskSummary> => {
+    const response = await api.get('/investments/risk', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  contributions: async (accountId?: number): Promise<ContributionPoint[]> => {
+    const response = await api.get('/investments/contributions', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  contributionForMonth: async (month: string): Promise<{ month: string; contribution: number | null; total_invested: number | null; snapshot_date: string | null }> => {
+    const response = await api.get('/investments/contributions/month', { params: { month } });
+    return response.data;
+  },
+
+  // Upload
+  upload: async (file: File, accountId: number, provider: 'xp' | 'itau' | 'c6' = 'xp'): Promise<{ success: boolean; filename: string; snapshot_id: number; positions_count: number; total_value: number; snapshot_date: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('account_id', accountId.toString());
+    formData.append('provider', provider);
+    const response = await api.post('/investments/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+};
+
 export default api;

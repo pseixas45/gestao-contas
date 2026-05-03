@@ -6,7 +6,7 @@ import MainLayout from '@/components/layout/MainLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import StatCard from '@/components/ui/StatCard';
 import { SkeletonCard } from '@/components/ui/Skeleton';
-import { reportsApi, projectionsApi, accountsApi, importsApi } from '@/lib/api';
+import { reportsApi, projectionsApi, accountsApi, importsApi, investmentsApi } from '@/lib/api';
 import { formatCurrency, getAccountTypeLabel } from '@/lib/utils';
 import {
   Wallet,
@@ -17,6 +17,7 @@ import {
   ArrowDownRight,
   ChevronLeft,
   ChevronRight,
+  PiggyBank,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -89,6 +90,11 @@ export default function DashboardPage() {
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts'],
     queryFn: () => accountsApi.list(),
+  });
+
+  const { data: monthInvestment } = useQuery({
+    queryKey: ['investments-contribution-month', selectedMonth],
+    queryFn: () => investmentsApi.contributionForMonth(selectedMonth),
   });
 
   // Auto-select Itaú (account_id=5) as default when accounts load
@@ -208,13 +214,6 @@ export default function DashboardPage() {
         {/* StatCards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
-            title="Saldo Total"
-            value={formatCurrency(Number(summary.total_balance_brl))}
-            subtitle="Todas as contas em BRL"
-            icon={Wallet}
-            color="primary"
-          />
-          <StatCard
             title="Receitas do Mes"
             value={formatCurrency(Number(summary.month_income))}
             subtitle={selectedMonthLabel}
@@ -234,6 +233,13 @@ export default function DashboardPage() {
             subtitle={monthBalance >= 0 ? 'Positivo' : 'Negativo'}
             icon={monthBalance >= 0 ? ArrowUpRight : ArrowDownRight}
             color={monthBalance >= 0 ? 'sky' : 'amber'}
+          />
+          <StatCard
+            title="Aplicacoes do Mes"
+            value={monthInvestment?.contribution != null ? formatCurrency(monthInvestment.contribution) : '—'}
+            subtitle={monthInvestment?.snapshot_date ? `Snapshot ${monthInvestment.snapshot_date}` : 'Sem snapshot'}
+            icon={PiggyBank}
+            color="primary"
           />
         </div>
 
