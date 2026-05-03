@@ -68,7 +68,7 @@ export default function ImportarInvestimentosPage() {
               >
                 <option value="xp">XP — PosicaoDetalhadaHistorica (.xlsx)</option>
                 <option value="itau">Itaú — Extrato Carteira (.pdf)</option>
-                <option value="c6">C6 (não disponível)</option>
+                <option value="c6">C6 — Posição por produto (.pdf)</option>
               </select>
             </div>
 
@@ -95,7 +95,7 @@ export default function ImportarInvestimentosPage() {
               <label className="text-xs text-slate-500 mb-1 block">Arquivo</label>
               <input
                 type="file"
-                accept={provider === 'itau' ? '.pdf' : '.xlsx,.xls'}
+                accept={provider === 'itau' || provider === 'c6' ? '.pdf' : '.xlsx,.xls'}
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                 className="w-full text-sm"
               />
@@ -109,7 +109,7 @@ export default function ImportarInvestimentosPage() {
 
             <button
               onClick={handleUpload}
-              disabled={!file || !accountId || uploading || provider === 'c6'}
+              disabled={!file || !accountId || uploading}
               className="w-full px-4 py-2.5 rounded-lg bg-primary-600 text-white font-medium hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Upload className="h-4 w-4" />

@@ -252,23 +252,25 @@ async def upload_investment_file(
 ):
     """Upload de arquivo de extrato de investimentos.
 
-    Provider: 'xp' (xlsx PosicaoDetalhada), 'itau' (pdf — TBD), 'c6' (TBD)
+    Provider: 'xp' (xlsx PosicaoDetalhada), 'itau' (pdf), 'c6' (pdf)
     """
-    # Salvar arquivo temporário
-    suffix = os.path.splitext(file.filename or "")[1] or ".xlsx"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    import shutil, re as _re
+    # Preserva o nome original — os parsers extraem a data dele
+    safe_name = _re.sub(r"[^A-Za-z0-9._-]", "_", file.filename or "upload")
+    tmp_dir = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmp_dir, safe_name)
     try:
         content = await file.read()
-        tmp.write(content)
-        tmp.close()
+        with open(tmp_path, "wb") as f:
+            f.write(content)
 
         svc = InvestmentImportService(db)
         if provider.lower() == "xp":
-            result = svc.import_xp_file(tmp.name, account_id)
+            result = svc.import_xp_file(tmp_path, account_id)
         elif provider.lower() == "itau":
-            result = svc.import_itau_file(tmp.name, account_id)
+            result = svc.import_itau_file(tmp_path, account_id)
         elif provider.lower() == "c6":
-            raise HTTPException(status_code=501, detail="Parser C6 em implementação")
+            result = svc.import_c6_file(tmp_path, account_id)
         else:
             raise HTTPException(status_code=400, detail=f"Provider desconhecido: {provider}")
 
@@ -280,10 +282,7 @@ async def upload_investment_file(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ===========================================================

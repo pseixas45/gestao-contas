@@ -586,6 +586,144 @@ class ItauCarteiraParser:
 
 
 # ============================================================
+# C6 Position Parser
+# ============================================================
+
+class C6PositionParser:
+    """Parser para PDF 'Posição por produto' do C6 Bank.
+
+    Layout esperado:
+    - Página 4 (ou similar): header 'Patrimônio final: R$ XX,XX'
+    - Tabela 'Posição por produto' com cabeçalho ABR/25 ... MAR/26
+    - Cada linha tem o nome do produto + 12 colunas mensais
+    - A última coluna (MMM/YY) é o mês mais recente = mês do snapshot
+    """
+
+    FILENAME_RE = re.compile(r"C6[-_](\d{2})[-_](\d{2})[-_](\d{4})", re.IGNORECASE)
+    MONTH_HEADER_RE = re.compile(r"^[A-Z]{3}/\d{2}$")
+
+    def __init__(self, file_path: str):
+        self.file_path = Path(file_path)
+
+    def parse(self) -> Dict[str, Any]:
+        try:
+            import pdfplumber
+        except ImportError:
+            raise RuntimeError("pdfplumber não instalado. pip install pdfplumber")
+
+        snapshot_date = self._extract_date_from_filename()
+        if not snapshot_date:
+            raise ValueError(
+                f"Nome do arquivo C6 não contém data no formato C6-DD-MM-YYYY.pdf "
+                f"(recebido: {self.file_path.name})"
+            )
+
+        positions: List[Dict[str, Any]] = []
+        total_patrimony: Optional[Decimal] = None
+
+        with pdfplumber.open(self.file_path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+
+                # Patrimônio final (geralmente pg 4)
+                if total_patrimony is None:
+                    m = re.search(r"Patrim\S*nio final:\s*R\$\s*([\d.,]+)", text)
+                    if m:
+                        total_patrimony = _parse_money(m.group(1))
+
+                # Tabelas (extract_tables preserva estrutura)
+                for tbl in page.extract_tables() or []:
+                    if not tbl or len(tbl) < 2:
+                        continue
+                    header = [self._norm(c) for c in tbl[0]]
+                    # Procurar última coluna que casa MMM/YY (a mais recente)
+                    month_col_idx = None
+                    for idx in range(len(header) - 1, -1, -1):
+                        if self.MONTH_HEADER_RE.match(header[idx].upper()):
+                            month_col_idx = idx
+                            break
+                    if month_col_idx is None:
+                        continue
+
+                    for row in tbl[1:]:
+                        if not row or len(row) <= month_col_idx:
+                            continue
+                        name = self._norm(row[0])
+                        if not name:
+                            continue
+                        if name.lower() in ("renda fixa", "renda variavel", "renda variável", "total", "total geral"):
+                            continue
+                        cell = self._norm(row[month_col_idx] or "")
+                        m_val = re.search(r"R\$\s*([\d.][\d.,]*)", cell)
+                        if not m_val:
+                            continue
+                        value = _parse_money(m_val.group(1))
+                        if not value or value <= 0:
+                            continue
+                        positions.append(self._build_position(name, value))
+
+        # Total: usa Patrimônio final se disponível, senão soma das posições
+        sum_positions = sum((p["value"] for p in positions), Decimal("0"))
+        total_value = total_patrimony or sum_positions
+
+        # allocation_pct
+        if total_value > 0:
+            for p in positions:
+                p["allocation_pct"] = (p["value"] / total_value * 100).quantize(Decimal("0.01"))
+
+        return {
+            "snapshot_date": snapshot_date,
+            "total_value": total_value,
+            "total_invested": None,
+            "available_balance": Decimal("0"),
+            "positions": positions,
+        }
+
+    def _extract_date_from_filename(self) -> Optional[date]:
+        """C6-31-03-2026.pdf → date(2026,3,31)."""
+        m = self.FILENAME_RE.search(self.file_path.name)
+        if not m:
+            return None
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _norm(s: Any) -> str:
+        if not s:
+            return ""
+        text = str(s).replace("\n", " ")
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _build_position(self, name: str, value: Decimal) -> Dict[str, Any]:
+        """Mapeia nome do produto C6 → AssetClassCode."""
+        name_lower = name.lower()
+        if "ipca" in name_lower or "pós" in name_lower or "pos-" in name_lower or "pos " in name_lower:
+            asset_class = AssetClassCode.POS_FIXADO
+        elif "prefixado" in name_lower or "prefixada" in name_lower or "pré" in name_lower or "pre-" in name_lower or "pre " in name_lower:
+            asset_class = AssetClassCode.PRE_FIXADO
+        else:
+            asset_class = AssetClassCode.RENDA_FIXA
+
+        return {
+            "name": name,
+            "name_normalized": _normalize_name(name),
+            "asset_class": asset_class,
+            "value": value,
+            "value_invested": None,
+            "quantity": None,
+            "allocation_pct": None,  # preenchido após calcular total
+            "yield_net_pct": None,
+            "yield_gross_pct": None,
+            "yield_value": None,
+            "maturity_date": None,
+            "contracted_rate": None,
+        }
+
+
+# ============================================================
 # Service: criar/atualizar Snapshot a partir do parse
 # ============================================================
 
@@ -600,6 +738,10 @@ class InvestmentImportService:
     def import_itau_file(self, file_path: str, account_id: int) -> Dict[str, Any]:
         """Importa arquivo Itaú (PDF Carteira)."""
         return self._import_with_parser(ItauCarteiraParser(file_path), file_path, account_id)
+
+    def import_c6_file(self, file_path: str, account_id: int) -> Dict[str, Any]:
+        """Importa arquivo C6 (PDF Posição por produto)."""
+        return self._import_with_parser(C6PositionParser(file_path), file_path, account_id)
 
     def _import_with_parser(self, parser, file_path: str, account_id: int) -> Dict[str, Any]:
         """Lógica comum para qualquer parser que retorne o dict padrão."""
