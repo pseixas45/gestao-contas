@@ -10,7 +10,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, extract
+from sqlalchemy import func, and_, or_, extract, case
 
 from app.models.transaction import Transaction
 from app.models.category import Category
@@ -132,87 +132,74 @@ class ReportService:
         currency: CurrencyCode = CurrencyCode.BRL,
         category_ids: Optional[List[int]] = None
     ) -> ExpenseTrendReport:
-        """
-        Obtém tendência de despesas por categoria ao longo de vários meses.
-
-        Args:
-            start_month: Mês inicial (YYYY-MM)
-            end_month: Mês final (YYYY-MM)
-            currency: Moeda
-            category_ids: Filtrar categorias
-
-        Returns:
-            Tendência por categoria
-        """
+        """Tendência de despesas por categoria via GROUP BY único."""
         amount_col = self._get_amount_column(currency)
 
-        # Gerar lista de meses
         start_year, start_m = map(int, start_month.split('-'))
         end_year, end_m = map(int, end_month.split('-'))
-
         start_date = date(start_year, start_m, 1)
-        end_date = date(end_year, end_m, 1)
+        if end_m == 12:
+            end_date_real = date(end_year + 1, 1, 1) - relativedelta(days=1)
+        else:
+            end_date_real = date(end_year, end_m + 1, 1) - relativedelta(days=1)
 
         months = []
         current = start_date
-        while current <= end_date:
+        while current <= date(end_year, end_m, 1):
             months.append(current.strftime('%Y-%m'))
             current += relativedelta(months=1)
 
-        # Buscar categorias
         if category_ids:
-            categories = self.db.query(Category).filter(
-                Category.id.in_(category_ids)
-            ).all()
+            categories = self.db.query(Category).filter(Category.id.in_(category_ids)).all()
         else:
-            categories = self.db.query(Category).filter(
-                Category.is_active == True
-            ).all()
+            categories = self.db.query(Category).filter(Category.is_active == True).all()
+        cat_ids = {c.id for c in categories}
 
-        # Montar tendências
+        rows = self.db.query(
+            Transaction.category_id,
+            extract('year', Transaction.date).label('yr'),
+            extract('month', Transaction.date).label('mo'),
+            func.sum(amount_col).label('total'),
+        ).filter(
+            Transaction.date >= start_date,
+            Transaction.date <= end_date_real,
+            amount_col < 0,
+        ).group_by(
+            Transaction.category_id,
+            extract('year', Transaction.date),
+            extract('month', Transaction.date),
+        ).all()
+
+        bucket: dict[int, dict[str, Decimal]] = {}
+        for cat_id, yr, mo, total in rows:
+            if cat_id is None or cat_id not in cat_ids or total is None:
+                continue
+            m_str = f"{int(yr):04d}-{int(mo):02d}"
+            bucket.setdefault(cat_id, {})[m_str] = abs(total)
+
         category_trends = []
         for cat in categories:
-            cat_months = []
-            total = Decimal("0.00")
-
-            for month in months:
-                year, m = map(int, month.split('-'))
-
-                amount = self.db.query(func.sum(amount_col)).filter(
-                    and_(
-                        Transaction.category_id == cat.id,
-                        extract('year', Transaction.date) == year,
-                        extract('month', Transaction.date) == m,
-                        amount_col < 0
-                    )
-                ).scalar() or Decimal("0.00")
-
-                amount = abs(amount)
-                total += amount
-
-                cat_months.append(ExpenseTrend(
-                    month=month,
-                    amount=amount.quantize(Decimal("0.01"))
-                ))
-
-            average = (total / len(months)).quantize(Decimal("0.01"))
-
+            month_amounts = bucket.get(cat.id, {})
+            cat_months = [
+                ExpenseTrend(month=m, amount=month_amounts.get(m, Decimal("0.00")).quantize(Decimal("0.01")))
+                for m in months
+            ]
+            total = sum(month_amounts.values(), Decimal("0.00"))
+            average = (total / len(months)).quantize(Decimal("0.01")) if months else Decimal("0.00")
             category_trends.append(CategoryTrend(
                 category_id=cat.id,
                 category_name=cat.name,
                 category_color=cat.color,
                 months=cat_months,
-                average=average
+                average=average,
             ))
 
-        # Ordenar por média
         category_trends.sort(key=lambda x: x.average, reverse=True)
-
         return ExpenseTrendReport(
             start_month=start_month,
             end_month=end_month,
             currency=currency,
-            categories=category_trends
+            categories=category_trends,
         )
 
     def get_budget_vs_actual(
@@ -242,24 +229,29 @@ class ReportService:
         # Buscar categorias
         categories = self.db.query(Category).filter(Category.is_active == True).all()
 
+        # Realizados em uma única query agregada
+        first_day = date(year, month_num, 1)
+        if month_num == 12:
+            last_day = date(year + 1, 1, 1) - relativedelta(days=1)
+        else:
+            last_day = date(year, month_num + 1, 1) - relativedelta(days=1)
+        actual_rows = self.db.query(
+            Transaction.category_id,
+            func.sum(amount_col).label('total'),
+        ).filter(
+            Transaction.date >= first_day,
+            Transaction.date <= last_day,
+            amount_col < 0,
+        ).group_by(Transaction.category_id).all()
+        actuals_by_cat = {row.category_id: abs(row.total or Decimal("0.00")) for row in actual_rows}
+
         items = []
         total_budgeted = Decimal("0.00")
         total_actual = Decimal("0.00")
 
         for cat in categories:
             budgeted = budgets.get(cat.id, Decimal("0.00"))
-
-            # Valor real
-            actual = self.db.query(func.sum(amount_col)).filter(
-                and_(
-                    Transaction.category_id == cat.id,
-                    extract('year', Transaction.date) == year,
-                    extract('month', Transaction.date) == month_num,
-                    amount_col < 0
-                )
-            ).scalar() or Decimal("0.00")
-
-            actual = abs(actual)
+            actual = actuals_by_cat.get(cat.id, Decimal("0.00"))
             difference = budgeted - actual
             percentage = float(actual / budgeted * 100) if budgeted > 0 else 0
 
@@ -362,6 +354,17 @@ class ReportService:
         # Buscar categorias
         categories = self.db.query(Category).filter(Category.is_active == True).all()
 
+        # Realizados (todas categorias) em UMA query agregada
+        actual_rows = self.db.query(
+            Transaction.category_id,
+            func.sum(amount_col).label('total'),
+        ).filter(
+            Transaction.date >= first_day,
+            Transaction.date <= reference_date,
+            amount_col < 0,
+        ).group_by(Transaction.category_id).all()
+        actuals_by_cat = {row.category_id: abs(row.total or Decimal("0.00")) for row in actual_rows}
+
         items = []
         total_actual = Decimal("0.00")
         total_projected = Decimal("0.00")
@@ -369,18 +372,7 @@ class ReportService:
 
         for cat in categories:
             projected = budgets.get(cat.id, Decimal("0.00"))
-
-            # Valor real até a data de referência
-            actual = self.db.query(func.sum(amount_col)).filter(
-                and_(
-                    Transaction.category_id == cat.id,
-                    Transaction.date >= first_day,
-                    Transaction.date <= reference_date,
-                    amount_col < 0
-                )
-            ).scalar() or Decimal("0.00")
-
-            actual = abs(actual)
+            actual = actuals_by_cat.get(cat.id, Decimal("0.00"))
 
             # Projeção esperada para o final do mês
             if is_current_month and day_ratio > 0:
@@ -433,64 +425,69 @@ class ReportService:
         """
         amount_col = self._get_amount_column(currency)
 
-        # Gerar lista de meses
         start_year, start_m = map(int, start_month.split('-'))
         end_year, end_m = map(int, end_month.split('-'))
-
         start_date = date(start_year, start_m, 1)
-        end_date = date(end_year, end_m, 1)
+        if end_m == 12:
+            end_date_real = date(end_year + 1, 1, 1) - relativedelta(days=1)
+        else:
+            end_date_real = date(end_year, end_m + 1, 1) - relativedelta(days=1)
+
+        months = []
+        cur = start_date
+        while cur <= date(end_year, end_m, 1):
+            months.append(cur.strftime('%Y-%m'))
+            cur += relativedelta(months=1)
+
+        # Categorias de transferência (1 query, fora do loop)
+        transfer_cat_ids = [
+            r[0] for r in self.db.query(Category.id).filter(Category.type == "transfer").all()
+        ]
+
+        base_filter = [
+            Transaction.date >= start_date,
+            Transaction.date <= end_date_real,
+        ]
+        if transfer_cat_ids:
+            base_filter.append(or_(
+                ~Transaction.category_id.in_(transfer_cat_ids),
+                Transaction.category_id.is_(None),
+            ))
+
+        # Receitas e despesas em UMA query agregada por (ano, mês, sinal)
+        rows = self.db.query(
+            extract('year', Transaction.date).label('yr'),
+            extract('month', Transaction.date).label('mo'),
+            func.sum(case((amount_col > 0, amount_col), else_=Decimal("0"))).label('income'),
+            func.sum(case((amount_col < 0, amount_col), else_=Decimal("0"))).label('expense'),
+        ).filter(*base_filter).group_by(
+            extract('year', Transaction.date),
+            extract('month', Transaction.date),
+        ).all()
+
+        bucket: dict[str, dict[str, Decimal]] = {}
+        for yr, mo, inc, exp in rows:
+            m_str = f"{int(yr):04d}-{int(mo):02d}"
+            bucket[m_str] = {
+                "income": inc or Decimal("0.00"),
+                "expense": abs(exp or Decimal("0.00")),
+            }
 
         months_data = []
         total_income = Decimal("0.00")
         total_expense = Decimal("0.00")
-
-        current = start_date
-        while current <= end_date:
-            month_str = current.strftime('%Y-%m')
-            year, m = current.year, current.month
-
-            # IDs de categorias tipo "transfer" para excluir
-            from sqlalchemy import or_
-            transfer_cat_ids = [c.id for c in self.db.query(Category.id).filter(
-                Category.type == "transfer"
-            ).all()]
-
-            base_filter = [
-                extract('year', Transaction.date) == year,
-                extract('month', Transaction.date) == m,
-            ]
-            if transfer_cat_ids:
-                base_filter.append(
-                    or_(
-                        ~Transaction.category_id.in_(transfer_cat_ids),
-                        Transaction.category_id == None
-                    )
-                )
-
-            # Receitas (valores positivos, excluindo transferências)
-            income = self.db.query(func.sum(amount_col)).filter(
-                and_(*base_filter, amount_col > 0)
-            ).scalar() or Decimal("0.00")
-
-            # Despesas (valores negativos, excluindo transferências)
-            expense = self.db.query(func.sum(amount_col)).filter(
-                and_(*base_filter, amount_col < 0)
-            ).scalar() or Decimal("0.00")
-
-            expense = abs(expense)
-            balance = income - expense
-
+        for m_str in months:
+            b = bucket.get(m_str, {"income": Decimal("0.00"), "expense": Decimal("0.00")})
+            income = b["income"]
+            expense = b["expense"]
             total_income += income
             total_expense += expense
-
             months_data.append(IncomeVsExpenseMonth(
-                month=month_str,
+                month=m_str,
                 income=income.quantize(Decimal("0.01")),
                 expense=expense.quantize(Decimal("0.01")),
-                balance=balance.quantize(Decimal("0.01"))
+                balance=(income - expense).quantize(Decimal("0.01")),
             ))
-
-            current += relativedelta(months=1)
 
         return IncomeVsExpenseReport(
             start_month=start_month,
@@ -513,18 +510,16 @@ class ReportService:
             BankAccount.is_active == True
         ).all()
 
+        # Pré-carregar bancos (evitar N+1)
+        bank_by_id = {b.id: b for b in self.db.query(Bank).all()}
+
         items = []
         total_brl = Decimal("0.00")
 
         for acc in accounts:
-            bank = self.db.query(Bank).filter(Bank.id == acc.bank_id).first()
-
-            # Para simplificar, assumir saldo já em BRL
-            # (conversão real dependeria das taxas do dia)
+            bank = bank_by_id.get(acc.bank_id)
             balance_brl = acc.current_balance
-
             total_brl += balance_brl
-
             items.append(AccountBalanceReport(
                 account_id=acc.id,
                 account_name=acc.name,
@@ -706,15 +701,27 @@ class ReportService:
         account_ids: Optional[List[int]] = None,
         category_ids: Optional[List[int]] = None,
     ) -> List[ReportTransactionDetail]:
-        """Retorna todas as transações individuais para exportação."""
+        """Retorna transações individuais via JOIN único (sem N+1)."""
         months, start_date, end_date_real = self._build_month_list(start_month, end_month)
 
-        query = self.db.query(Transaction).filter(
-            and_(
-                Transaction.date >= start_date,
-                Transaction.date <= end_date_real,
-            )
-        )
+        query = self.db.query(
+            Transaction.date,
+            Transaction.description,
+            Category.name.label('cat_name'),
+            Category.type.label('cat_type'),
+            BankAccount.name.label('acc_name'),
+            Transaction.original_amount,
+            Transaction.original_currency,
+            Transaction.amount_brl,
+            Transaction.amount_usd,
+            Transaction.amount_eur,
+            Transaction.id,
+        ).outerjoin(Category, Transaction.category_id == Category.id) \
+         .outerjoin(BankAccount, Transaction.account_id == BankAccount.id) \
+         .filter(
+            Transaction.date >= start_date,
+            Transaction.date <= end_date_real,
+         )
 
         if account_ids:
             query = query.filter(Transaction.account_id.in_(account_ids))
@@ -730,26 +737,20 @@ class ReportService:
             else:
                 query = query.filter(Transaction.category_id.in_(real_cat_ids))
 
-        query = query.order_by(Transaction.date, Transaction.id)
-        transactions = query.all()
-
-        all_categories = {c.id: c for c in self.db.query(Category).all()}
-        all_accounts = {a.id: a for a in self.db.query(BankAccount).all()}
+        rows = query.order_by(Transaction.date, Transaction.id).all()
 
         items = []
-        for t in transactions:
-            cat = all_categories.get(t.category_id) if t.category_id else None
-            acc = all_accounts.get(t.account_id)
+        for r in rows:
             items.append(ReportTransactionDetail(
-                date=t.date.strftime('%Y-%m-%d'),
-                description=t.description,
-                category_name=cat.name if cat else None,
-                category_type=cat.type.value if cat and cat.type else None,
-                account_name=acc.name if acc else None,
-                original_amount=t.original_amount,
-                original_currency=t.original_currency.value if t.original_currency else "BRL",
-                amount_brl=t.amount_brl,
-                amount_usd=t.amount_usd,
-                amount_eur=t.amount_eur,
+                date=r.date.strftime('%Y-%m-%d'),
+                description=r.description,
+                category_name=r.cat_name,
+                category_type=r.cat_type.value if r.cat_type else None,
+                account_name=r.acc_name,
+                original_amount=r.original_amount,
+                original_currency=r.original_currency.value if r.original_currency else "BRL",
+                amount_brl=r.amount_brl,
+                amount_usd=r.amount_usd,
+                amount_eur=r.amount_eur,
             ))
         return items
