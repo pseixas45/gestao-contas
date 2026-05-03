@@ -67,13 +67,17 @@ class InvestmentPositionResponse(BaseModel):
     asset_id: int
     asset_name: Optional[str] = None
     asset_class_code: Optional[str] = None
-    value: Decimal
-    value_invested: Optional[Decimal] = None
-    quantity: Optional[Decimal] = None
-    allocation_pct: Optional[Decimal] = None
-    yield_net_pct: Optional[Decimal] = None
-    yield_gross_pct: Optional[Decimal] = None
-    yield_value: Optional[Decimal] = None
+    # Contexto da snapshot (para a UI agrupar/validar contra extrato)
+    account_id: Optional[int] = None
+    account_name: Optional[str] = None
+    snapshot_date: Optional[date] = None
+    value: float
+    value_invested: Optional[float] = None
+    quantity: Optional[float] = None
+    allocation_pct: Optional[float] = None
+    yield_net_pct: Optional[float] = None
+    yield_gross_pct: Optional[float] = None
+    yield_value: Optional[float] = None
     maturity_date: Optional[date] = None
     contracted_rate: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
@@ -99,12 +103,12 @@ class InvestmentSnapshotResponse(BaseModel):
     account_name: Optional[str] = None
     bank_name: Optional[str] = None
     snapshot_date: date
-    total_value: Decimal
-    total_invested: Optional[Decimal] = None
-    available_balance: Optional[Decimal] = None
-    yield_month_pct: Optional[Decimal] = None
-    yield_ytd_pct: Optional[Decimal] = None
-    yield_total_pct: Optional[Decimal] = None
+    total_value: float
+    total_invested: Optional[float] = None
+    available_balance: Optional[float] = None
+    yield_month_pct: Optional[float] = None
+    yield_ytd_pct: Optional[float] = None
+    yield_total_pct: Optional[float] = None
     notes: Optional[str] = None
     positions_count: int = 0
     model_config = ConfigDict(from_attributes=True)
@@ -142,13 +146,13 @@ class InvestmentGoalResponse(BaseModel):
     type: GoalType
     name: str
     description: Optional[str] = None
-    target_value: Optional[Decimal] = None
+    target_value: Optional[float] = None
     target_class_id: Optional[int] = None
     target_class_name: Optional[str] = None
     period_start: Optional[date] = None
     period_end: Optional[date] = None
     is_active: bool
     # Cálculo de progresso (preenchido pelo backend ao listar)
-    current_value: Optional[Decimal] = None
-    progress_pct: Optional[Decimal] = None
+    current_value: Optional[float] = None
+    progress_pct: Optional[float] = None
     model_config = ConfigDict(from_attributes=True)

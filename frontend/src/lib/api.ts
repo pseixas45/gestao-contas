@@ -697,6 +697,9 @@ export interface InvestmentPosition {
   asset_id: number;
   asset_name: string | null;
   asset_class_code: string | null;
+  account_id: number | null;
+  account_name: string | null;
+  snapshot_date: string | null;
   value: number;
   value_invested: number | null;
   quantity: number | null;

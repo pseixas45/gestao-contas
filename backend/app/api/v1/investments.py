@@ -295,14 +295,16 @@ def list_current_positions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Posições da última snapshot disponível (por conta ou agregada)."""
-    snaps_query = db.query(InvestmentSnapshot)
+    """Posições da última snapshot de cada conta de investimento (ou de uma conta específica)."""
     if account_id:
-        snaps_query = snaps_query.filter(InvestmentSnapshot.account_id == account_id)
-    # Pegar última snapshot de cada conta
-    accounts = db.query(BankAccount).filter(
-        BankAccount.account_type == "INVESTMENT"
-    ).all() if not account_id else [db.query(BankAccount).filter(BankAccount.id == account_id).first()]
+        accounts = [db.query(BankAccount).filter(BankAccount.id == account_id).first()]
+    else:
+        accounts = (
+            db.query(BankAccount)
+            .filter(BankAccount.account_type == "INVESTMENT")
+            .filter(BankAccount.is_active == True)
+            .all()
+        )
 
     result = []
     for acc in accounts:
@@ -322,6 +324,9 @@ def list_current_positions(
                 asset_id=p.asset_id,
                 asset_name=p.asset.name if p.asset else None,
                 asset_class_code=p.asset.asset_class.code.value if p.asset and p.asset.asset_class else None,
+                account_id=acc.id,
+                account_name=acc.name,
+                snapshot_date=last.snapshot_date,
                 value=p.value,
                 value_invested=p.value_invested,
                 quantity=p.quantity,
