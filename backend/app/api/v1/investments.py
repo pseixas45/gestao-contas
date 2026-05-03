@@ -467,24 +467,20 @@ def get_dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Dados consolidados para o dashboard de investimentos."""
-    overview = analysis.get_portfolio_overview(db, account_id)
-    allocation_class = analysis.get_allocation(db, account_id, "class")
-    allocation_bank = analysis.get_allocation(db, account_id, "bank")
-    history = analysis.get_history(db, account_id)
-    exposure = analysis.get_exposure(db, account_id)
-    risk = analysis.get_risk_summary(db, account_id)
-    liquidity = analysis.get_liquidity(db, account_id)
-    contributions = analysis.get_monthly_contributions(db, account_id)
+    """Dados consolidados para o dashboard de investimentos.
+
+    Usa um único cache de snapshots/posições para evitar N+1.
+    """
+    cache = analysis._SnapshotCache(db, account_id)
     return {
-        "overview": overview,
-        "allocation_by_class": allocation_class,
-        "allocation_by_bank": allocation_bank,
-        "history": history,
-        "exposure": exposure,
-        "risk": risk,
-        "liquidity": liquidity,
-        "contributions": contributions,
+        "overview": analysis.get_portfolio_overview(db, account_id, cache=cache),
+        "allocation_by_class": analysis.get_allocation(db, account_id, "class", cache=cache),
+        "allocation_by_bank": analysis.get_allocation(db, account_id, "bank", cache=cache),
+        "history": analysis.get_history(db, account_id, cache=cache),
+        "exposure": analysis.get_exposure(db, account_id, cache=cache),
+        "risk": analysis.get_risk_summary(db, account_id, cache=cache),
+        "liquidity": analysis.get_liquidity(db, account_id, cache=cache),
+        "contributions": analysis.get_monthly_contributions(db, account_id, cache=cache),
     }
 
 
