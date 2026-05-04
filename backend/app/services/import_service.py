@@ -833,31 +833,42 @@ class ImportService:
             balance_after = self._parse_amount(balance_str)
 
         # Ajustar data para cartão de crédito com parcelas
+        # Regra: parcela N deve cair no MÊS DA COMPRA + (N-1) meses.
+        # - Parcela 1 ou compra à vista: usa trans_date (data original da compra).
+        # - Parcela N>1: tenta data da parcela anterior no DB + 1 mês (mantém consistência
+        #   se uma parcela anterior já foi ajustada manualmente). Senão, calcula a partir
+        #   de trans_date + (N-1) meses.
+        # NÃO usar mais o mês de card_payment_date — isso jogava compras de um mês
+        # no mês do vencimento da fatura (ex: compra 13/04 numa fatura que vence 20/05
+        # ia para 13/05).
         effective_date = trans_date
-        if account.is_credit_card and card_payment_date and installment_number is not None:
-            # Tentar encontrar a parcela anterior no banco para calcular data correta
+        if (
+            account.is_credit_card
+            and installment_number is not None
+            and installment_number > 1
+        ):
             desc_base = get_installment_base_description(description_clean)
             prev_installment = find_previous_installment(
                 self.db, account_id, desc_base, installment_number, installment_total
             )
 
             if prev_installment:
-                # Usar data da parcela anterior + 1 mês
-                prev_date = prev_installment.date
-                next_month = prev_date.month + 1
-                next_year = prev_date.year
-                if next_month > 12:
-                    next_month = 1
-                    next_year += 1
-                try:
-                    effective_date = date(next_year, next_month, prev_date.day)
-                except ValueError:
-                    # Dia não existe no mês (ex: 31 em mês de 30 dias)
-                    last_day = calendar.monthrange(next_year, next_month)[1]
-                    effective_date = date(next_year, next_month, last_day)
+                base_date = prev_installment.date
+                offset_months = 1
             else:
-                # Fallback: usar lógica original (ajustar para mês da fatura)
-                effective_date = adjust_date_for_credit_card(trans_date, card_payment_date)
+                base_date = trans_date
+                offset_months = installment_number - 1
+
+            target_month = base_date.month + offset_months
+            target_year = base_date.year
+            while target_month > 12:
+                target_month -= 12
+                target_year += 1
+            try:
+                effective_date = date(target_year, target_month, base_date.day)
+            except ValueError:
+                last_day = calendar.monthrange(target_year, target_month)[1]
+                effective_date = date(target_year, target_month, last_day)
 
         # Gerar hash para verificar duplicata (normalização é feita dentro de generate_hash)
         trans_hash = Transaction.generate_hash(

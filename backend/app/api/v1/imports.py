@@ -275,28 +275,36 @@ async def analyze_import(
                     description = f"{description} {installment_number} de {installment_total}"
 
             # Ajustar data para parcelas de cartão de crédito
+            # Regra: parcela N cai no MÊS DA COMPRA + (N-1) meses.
+            # Parcela 1 ou compra à vista: data original (trans_date) preservada.
             original_date = trans_date
-            if account.is_credit_card and card_payment_date and installment_number is not None:
-                # Buscar parcela anterior para calcular data correta
+            if (
+                account.is_credit_card
+                and installment_number is not None
+                and installment_number > 1
+            ):
                 import calendar
                 desc_base = get_installment_base_description(description)
                 prev = find_previous_installment(
                     db, data.account_id, desc_base, installment_number, installment_total
                 )
                 if prev:
-                    prev_date = prev.date
-                    next_month = prev_date.month + 1
-                    next_year = prev_date.year
-                    if next_month > 12:
-                        next_month = 1
-                        next_year += 1
-                    try:
-                        trans_date = date_type(next_year, next_month, prev_date.day)
-                    except ValueError:
-                        last_day = calendar.monthrange(next_year, next_month)[1]
-                        trans_date = date_type(next_year, next_month, last_day)
+                    base_date = prev.date
+                    offset_months = 1
                 else:
-                    trans_date = adjust_date_for_credit_card(trans_date, card_payment_date)
+                    base_date = trans_date
+                    offset_months = installment_number - 1
+
+                target_month = base_date.month + offset_months
+                target_year = base_date.year
+                while target_month > 12:
+                    target_month -= 12
+                    target_year += 1
+                try:
+                    trans_date = date_type(target_year, target_month, base_date.day)
+                except ValueError:
+                    last_day = calendar.monthrange(target_year, target_month)[1]
+                    trans_date = date_type(target_year, target_month, last_day)
 
             all_dates.append(trans_date)
 
