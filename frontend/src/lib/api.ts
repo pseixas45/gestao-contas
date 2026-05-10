@@ -931,4 +931,103 @@ export const investmentsApi = {
   },
 };
 
+// Expense Reports (Reembolso)
+export interface ExpenseReportSummary {
+  id: number;
+  reference_month: string;
+  status: 'draft' | 'submitted' | 'reimbursed';
+  total_brl: number;
+  item_count: number;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UnreportedTransaction {
+  id: number;
+  date: string;
+  description: string;
+  amount_brl: number;
+  original_amount: number;
+  original_currency: string;
+  installment_info: string | null;
+  account_name: string | null;
+}
+
+export interface ExpenseReportTransactionItem {
+  transaction_id: number;
+  date: string;
+  description: string;
+  amount_brl: number;
+  original_amount: number;
+  original_currency: string;
+  installment_info: string | null;
+  account_name: string | null;
+}
+
+export interface ExpenseReportDetail extends ExpenseReportSummary {
+  items: ExpenseReportTransactionItem[];
+}
+
+export interface ExpectedItem {
+  pattern: string;
+  sample_description: string;
+  frequency: number;
+  total_reports: number;
+  avg_amount: number;
+  found: boolean;
+  matched_transaction_ids: number[];
+}
+
+export interface ExpectedItemsResponse {
+  expected: ExpectedItem[];
+  found_count: number;
+  missing_count: number;
+}
+
+export const expenseReportsApi = {
+  list: async (): Promise<ExpenseReportSummary[]> => {
+    const response = await api.get('/expense-reports');
+    return response.data;
+  },
+
+  getExpectedItems: async (): Promise<ExpectedItemsResponse> => {
+    const response = await api.get('/expense-reports/expected-items');
+    return response.data;
+  },
+
+  getUnreported: async (): Promise<UnreportedTransaction[]> => {
+    const response = await api.get('/expense-reports/unreported-transactions');
+    return response.data;
+  },
+
+  get: async (id: number): Promise<ExpenseReportDetail> => {
+    const response = await api.get(`/expense-reports/${id}`);
+    return response.data;
+  },
+
+  create: async (data: { reference_month: string; transaction_ids: number[]; notes?: string }): Promise<ExpenseReportDetail> => {
+    const response = await api.post('/expense-reports', data);
+    return response.data;
+  },
+
+  update: async (id: number, data: {
+    add_transaction_ids?: number[];
+    remove_transaction_ids?: number[];
+    status?: string;
+    notes?: string;
+  }): Promise<ExpenseReportDetail> => {
+    const response = await api.put(`/expense-reports/${id}`, data);
+    return response.data;
+  },
+
+  delete: async (id: number): Promise<void> => {
+    await api.delete(`/expense-reports/${id}`);
+  },
+
+  getExportUrl: (id: number): string => {
+    return `${API_URL}/api/v1/expense-reports/${id}/export`;
+  },
+};
+
 export default api;

@@ -12,6 +12,7 @@ from app.models.cash_projection import CashProjectionItem
 from app.models.saved_report import SavedReportView
 from app.models.import_template import ImportTemplate
 from app.models.balance_log import AccountBalanceLog
+from app.models.expense_report import ExpenseReport, ExpenseReportItem, ExpenseReportStatus
 from app.models.investment import (
     AssetClass,
     AssetClassCode,
@@ -42,6 +43,9 @@ __all__ = [
     "SavedReportView",
     "ImportTemplate",
     "AccountBalanceLog",
+    "ExpenseReport",
+    "ExpenseReportItem",
+    "ExpenseReportStatus",
     "AssetClass",
     "AssetClassCode",
     "Asset",

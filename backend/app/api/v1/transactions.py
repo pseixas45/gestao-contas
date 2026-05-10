@@ -543,6 +543,10 @@ def delete_transaction(
     if not transaction:
         raise HTTPException(status_code=404, detail="Transação não encontrada")
 
+    # Remover vínculos com relatórios de reembolso
+    from app.models.expense_report import ExpenseReportItem
+    db.query(ExpenseReportItem).filter(ExpenseReportItem.transaction_id == transaction_id).delete()
+
     # Atualizar saldo da conta
     account = transaction.account
     log_balance_change(db, account, account.current_balance - transaction.amount,

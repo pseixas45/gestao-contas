@@ -17,6 +17,7 @@ import {
   BookOpen,
   X,
   LineChart,
+  Receipt,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -63,6 +64,7 @@ export default function Sidebar({ pendingCount = 0, onLogout, isOpen = false, on
         { href: '/orcamento', label: 'Orçamento', icon: <PiggyBank size={18} /> },
         { href: '/projecao', label: 'Projeção', icon: <TrendingUp size={18} /> },
         { href: '/investimentos', label: 'Investimentos', icon: <LineChart size={18} /> },
+        { href: '/reembolsos', label: 'Reembolsos', icon: <Receipt size={18} /> },
       ],
     },
     {
