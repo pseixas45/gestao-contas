@@ -71,6 +71,29 @@ def get_budget_grid(
     # Buscar todas as categorias ativas
     all_categories = db.query(Category).filter(Category.is_active == True).order_by(Category.name).all()
 
+    # Calcular média dos últimos 3 meses de transações reais (antes do start_month)
+    from app.models.transaction import Transaction
+    from dateutil.relativedelta import relativedelta
+    from sqlalchemy import func, extract
+
+    start_date_parsed = date(start_year, start_m, 1)
+    avg_end = start_date_parsed - relativedelta(days=1)  # último dia do mês anterior
+    avg_start = (start_date_parsed - relativedelta(months=3))  # 3 meses antes
+
+    avg_amount_col = getattr(Transaction, amount_col)
+    avg_query = db.query(
+        Transaction.category_id,
+        func.sum(avg_amount_col).label("total_amount"),
+    ).filter(
+        Transaction.date >= avg_start,
+        Transaction.date <= avg_end,
+        Transaction.category_id.isnot(None),
+    ).group_by(Transaction.category_id).all()
+
+    avg_map = {}
+    for row in avg_query:
+        avg_map[row.category_id] = row.total_amount / Decimal("3")
+
     # Montar mapa: {category_id: {month: amount}}
     budget_map = {}
     for b in budgets:
@@ -99,6 +122,7 @@ def get_budget_grid(
             category_color=cat.color,
             values=values,
             total=total,
+            avg_3m=avg_map.get(cat.id),
         )
 
         if cat.type == CategoryType.EXPENSE:
@@ -351,4 +375,220 @@ def create_from_suggestions(
         "success": True,
         "created_count": len(created),
         "month": month
+    }
+
+
+@router.get("/installment-projections")
+def get_installment_projections(
+    db: Session = Depends(get_db)
+):
+    """
+    Projeção de parcelas futuras.
+
+    Busca todas as transações parceladas onde installment_number < installment_total,
+    calcula as parcelas restantes com datas projetadas, e retorna em formato pivot
+    (categoria × mês) com detalhamento por lançamento.
+    """
+    from app.models.transaction import Transaction
+    from app.models.account import BankAccount
+    from collections import defaultdict
+    from dateutil.relativedelta import relativedelta
+
+    import re
+
+    # Buscar TODAS as transações parceladas (realizadas + com parcelas futuras)
+    all_installments = db.query(Transaction).filter(
+        Transaction.installment_number.isnot(None),
+        Transaction.installment_total.isnot(None),
+        Transaction.installment_total > 1
+    ).all()
+
+    # Agrupar por (conta + descrição base + total parcelas + valor arredondado)
+    # Arredonda para inteiro para tolerar diferença de centavos entre parcelas
+    # (ex: 1/4=383.61, 2/4=383.60 são a mesma compra)
+    # Ainda separa compras genuinamente diferentes (ex: Positivo R$414 vs R$1241)
+    groups_map = defaultdict(list)
+    for t in all_installments:
+        desc_clean = re.sub(r'\s*\d{1,2}\s*(?:de|/)\s*\d{1,2}\s*$', '', t.description).strip()
+        amt_key = round(abs(float(t.amount_brl)))
+        group_key = (t.account_id, desc_clean.upper(), t.installment_total, amt_key)
+        groups_map[group_key].append(t)
+
+    projections = []
+
+    for (account_id, desc_upper, inst_total, amt_key), txns in groups_map.items():
+        # Ordenar por installment_number
+        txns.sort(key=lambda x: x.installment_number)
+
+        # Determinar quantas compras paralelas existem no grupo
+        # (ex: 2x L293 Shopping 724.50 10/10 = 2 compras distintas)
+        from collections import Counter
+        count_per_number = Counter(t.installment_number for t in txns)
+        num_purchases = max(count_per_number.values())
+
+        latest = txns[-1]
+        category_id = latest.category_id
+        category_name = latest.category.name if latest.category else "Sem categoria"
+        category_color = latest.category.color if latest.category else None
+        account_name = latest.account.name if latest.account else None
+        desc_clean = re.sub(r'\s*\d{1,2}\s*(?:de|/)\s*\d{1,2}\s*$', '', latest.description).strip()
+
+        # Parcelas realizadas — incluir todas as transações do banco
+        realized_numbers = set()
+        for t in txns:
+            realized_numbers.add(t.installment_number)
+            t_month = f"{t.date.year:04d}-{t.date.month:02d}"
+            projections.append({
+                "month": t_month,
+                "category_id": category_id,
+                "category_name": category_name,
+                "category_color": category_color,
+                "account_name": account_name,
+                "description": desc_clean,
+                "amount_brl": abs(float(t.amount_brl)),
+                "installment_info": f"{t.installment_number}/{inst_total}",
+                "status": "realized",
+                "original_transaction_id": t.id,
+            })
+
+        # Parcelas futuras — projetar para cada compra paralela
+        if latest.installment_number < inst_total:
+            base_amount = abs(float(latest.amount_brl))
+            base_date = latest.date
+            for future_n in range(latest.installment_number + 1, inst_total + 1):
+                if future_n in realized_numbers:
+                    continue
+                months_ahead = future_n - latest.installment_number
+                future_date = base_date + relativedelta(months=months_ahead)
+                future_month = f"{future_date.year:04d}-{future_date.month:02d}"
+                for _ in range(num_purchases):
+                    projections.append({
+                        "month": future_month,
+                        "category_id": category_id,
+                        "category_name": category_name,
+                        "category_color": category_color,
+                        "account_name": account_name,
+                        "description": desc_clean,
+                        "amount_brl": base_amount,
+                        "installment_info": f"{future_n}/{inst_total}",
+                        "status": "projected",
+                        "original_transaction_id": latest.id,
+                    })
+
+    # Organizar por mês
+    all_months = sorted(set(p["month"] for p in projections))
+
+    # Organizar por categoria com detalhes
+    categories_data = defaultdict(lambda: {"items": [], "months": defaultdict(float)})
+
+    for p in projections:
+        key = p["category_id"] or 0
+        cat = categories_data[key]
+        cat["category_id"] = p["category_id"]
+        cat["category_name"] = p["category_name"]
+        cat["category_color"] = p["category_color"]
+        cat["items"].append(p)
+        cat["months"][p["month"]] += p["amount_brl"]
+
+    # Montar resposta
+    rows = []
+    for key in sorted(categories_data.keys(), key=lambda k: categories_data[k]["category_name"]):
+        cat = categories_data[key]
+        # Detalhamento: agrupar items por descrição+conta
+        detail_key = defaultdict(lambda: {"months": defaultdict(float), "items": []})
+        for item in cat["items"]:
+            dk = f"{item['description']}|{item['account_name'] or ''}"
+            detail_key[dk]["description"] = item["description"]
+            detail_key[dk]["account_name"] = item["account_name"]
+            detail_key[dk]["months"][item["month"]] += item["amount_brl"]
+            detail_key[dk]["items"].append({
+                "month": item["month"],
+                "amount_brl": item["amount_brl"],
+                "installment_info": item["installment_info"],
+                "status": item.get("status", "projected"),
+            })
+
+        details = []
+        for dk_data in sorted(detail_key.values(), key=lambda x: x["description"]):
+            details.append({
+                "description": dk_data["description"],
+                "account_name": dk_data["account_name"],
+                "months": dict(dk_data["months"]),
+                "total": sum(dk_data["months"].values()),
+                "items": dk_data["items"],
+            })
+
+        rows.append({
+            "category_id": cat["category_id"],
+            "category_name": cat["category_name"],
+            "category_color": cat["category_color"],
+            "months": dict(cat["months"]),
+            "total": sum(cat["months"].values()),
+            "details": details,
+        })
+
+    # Totais por mês
+    month_totals = {}
+    for m in all_months:
+        month_totals[m] = sum(r["months"].get(m, 0) for r in rows)
+
+    return {
+        "months": all_months,
+        "rows": rows,
+        "month_totals": month_totals,
+        "grand_total": sum(month_totals.values()),
+    }
+
+
+@router.post("/from-installment-projections")
+def copy_projections_to_budget(
+    data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Copia projeções de parcelas para o orçamento.
+
+    Recebe: { "items": [ { "month": "YYYY-MM", "category_id": int, "amount_brl": float } ] }
+    Para cada item, faz upsert no orçamento (soma ao valor existente ou cria novo).
+    """
+    items = data.get("items", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="Nenhum item para copiar")
+
+    created = 0
+    updated = 0
+
+    for item in items:
+        month = item["month"]
+        category_id = item["category_id"]
+        amount = Decimal(str(item["amount_brl"]))
+
+        existing = db.query(Budget).filter(
+            Budget.month == month,
+            Budget.category_id == category_id
+        ).first()
+
+        if existing:
+            existing.amount_brl = amount
+            existing.updated_at = date.today()
+            updated += 1
+        else:
+            budget = Budget(
+                month=month,
+                category_id=category_id,
+                amount_brl=amount,
+                amount_usd=Decimal("0"),
+                amount_eur=Decimal("0"),
+                input_currency="BRL",
+            )
+            db.add(budget)
+            created += 1
+
+    db.commit()
+
+    return {
+        "success": True,
+        "created": created,
+        "updated": updated,
+        "total": len(items),
     }

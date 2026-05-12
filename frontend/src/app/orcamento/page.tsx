@@ -233,7 +233,7 @@ export default function OrcamentoPage() {
       <>
         {/* Group header */}
         <tr className={bgClass}>
-          <td colSpan={(grid?.months.length || 0) + 2} className={`px-4 py-2 font-bold ${colorClass} sticky left-0 z-10 ${bgClass} border border-gray-300`}>
+          <td colSpan={(grid?.months.length || 0) + 3} className={`px-4 py-2 font-bold ${colorClass} sticky left-0 z-10 ${bgClass} border border-gray-300`}>
             {label}
           </td>
         </tr>
@@ -248,6 +248,9 @@ export default function OrcamentoPage() {
                 <span className="text-gray-800">{row.category_name}</span>
               </div>
             </td>
+            <td className="px-3 py-2 text-right text-xs text-amber-700 bg-amber-50/50 border border-gray-300">
+              {row.avg_3m != null && Number(row.avg_3m) !== 0 ? formatCurrency(Number(row.avg_3m), currencyCode) : '-'}
+            </td>
             {grid!.months.map((m) => renderCell(row.category_id, m, Number(row.values[m] || 0)))}
             <td className="px-4 py-2 text-right font-semibold bg-gray-50 text-gray-800 border border-gray-300">
               {Number(row.total) !== 0 ? formatCurrency(Number(row.total), currencyCode) : '-'}
@@ -258,6 +261,12 @@ export default function OrcamentoPage() {
         <tr className="border-t border-gray-300">
           <td className={`px-4 py-2 font-bold ${colorClass} sticky left-0 bg-gray-50 z-10 border border-gray-300`}>
             Subtotal {label}
+          </td>
+          <td className={`px-3 py-2 text-right font-bold border border-gray-300 bg-amber-50/50 ${colorClass}`}>
+            {(() => {
+              const sum = rows.reduce((s, r) => s + Number(r.avg_3m || 0), 0);
+              return sum !== 0 ? formatCurrency(sum, currencyCode) : '-';
+            })()}
           </td>
           {grid!.months.map((m) => {
             const val = groupMonthTotals[m] || 0;
@@ -344,6 +353,9 @@ export default function OrcamentoPage() {
                       <th className="px-4 py-3 text-left font-medium text-gray-600 min-w-[250px] sticky left-0 bg-gray-50 z-10 border border-gray-300">
                         Categoria
                       </th>
+                      <th className="px-3 py-3 text-right font-medium text-gray-600 min-w-[110px] border border-gray-300 bg-amber-50 text-amber-700">
+                        Média 3M
+                      </th>
                       {grid!.months.map((m) => (
                         <th key={m} className="px-3 py-3 text-right font-medium text-gray-600 min-w-[110px] border border-gray-300">
                           {formatMonth(m)}
@@ -363,6 +375,15 @@ export default function OrcamentoPage() {
                     <tr>
                       <td className="px-4 py-3 font-bold text-gray-700 sticky left-0 bg-gray-100 z-10 border border-gray-400">
                         TOTAL GERAL
+                      </td>
+                      <td className={`px-3 py-3 text-right font-bold border border-gray-400 bg-gray-100 ${(() => {
+                        const sum = [...grid!.expense_rows, ...grid!.income_rows, ...grid!.transfer_rows].reduce((s, r) => s + Number(r.avg_3m || 0), 0);
+                        return sum >= 0 ? 'text-green-700' : 'text-red-700';
+                      })()}`}>
+                        {(() => {
+                          const sum = [...grid!.expense_rows, ...grid!.income_rows, ...grid!.transfer_rows].reduce((s, r) => s + Number(r.avg_3m || 0), 0);
+                          return sum !== 0 ? formatCurrency(sum, currencyCode) : '-';
+                        })()}
                       </td>
                       {grid!.months.map((m) => {
                         const val = columnTotals[m] || 0;

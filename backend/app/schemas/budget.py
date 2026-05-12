@@ -111,6 +111,7 @@ class BudgetGridRow(BaseModel):
     category_color: Optional[str] = None
     values: dict[str, Decimal]  # {"2026-01": 1500.00, ...}
     total: Decimal
+    avg_3m: Optional[Decimal] = None  # Média dos últimos 3 meses (transações reais)
 
 
 class BudgetGridResponse(BaseModel):

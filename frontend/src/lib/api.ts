@@ -599,6 +599,7 @@ export interface BudgetGridRow {
   category_color: string | null;
   values: Record<string, number>;
   total: number;
+  avg_3m: number | null;
 }
 
 export interface BudgetGridResponse {
@@ -619,6 +620,30 @@ export interface BudgetCellUpdateResult {
   amount_brl?: number;
   amount_usd?: number;
   amount_eur?: number;
+}
+
+export interface InstallmentProjectionDetail {
+  description: string;
+  account_name: string | null;
+  months: Record<string, number>;
+  total: number;
+  items: { month: string; amount_brl: number; installment_info: string; status: 'realized' | 'projected' }[];
+}
+
+export interface InstallmentProjectionRow {
+  category_id: number | null;
+  category_name: string;
+  category_color: string | null;
+  months: Record<string, number>;
+  total: number;
+  details: InstallmentProjectionDetail[];
+}
+
+export interface InstallmentProjectionsResponse {
+  months: string[];
+  rows: InstallmentProjectionRow[];
+  month_totals: Record<string, number>;
+  grand_total: number;
 }
 
 export const budgetsApi = {
@@ -646,6 +671,16 @@ export const budgetsApi = {
       source_month: sourceMonth,
       target_month: targetMonth,
     });
+    return response.data;
+  },
+
+  getInstallmentProjections: async (): Promise<InstallmentProjectionsResponse> => {
+    const response = await api.get('/budgets/installment-projections');
+    return response.data;
+  },
+
+  copyProjectionsToBudget: async (items: { month: string; category_id: number; amount_brl: number }[]): Promise<{ success: boolean; created: number; updated: number; total: number }> => {
+    const response = await api.post('/budgets/from-installment-projections', { items });
     return response.data;
   },
 };
