@@ -71,14 +71,15 @@ def get_budget_grid(
     # Buscar todas as categorias ativas
     all_categories = db.query(Category).filter(Category.is_active == True).order_by(Category.name).all()
 
-    # Calcular média dos últimos 3 meses de transações reais (antes do start_month)
+    # Calcular média dos últimos 3 meses de transações reais (relativos ao mês atual)
     from app.models.transaction import Transaction
     from dateutil.relativedelta import relativedelta
     from sqlalchemy import func, extract
 
-    start_date_parsed = date(start_year, start_m, 1)
-    avg_end = start_date_parsed - relativedelta(days=1)  # último dia do mês anterior
-    avg_start = (start_date_parsed - relativedelta(months=3))  # 3 meses antes
+    today = date.today()
+    current_month_start = date(today.year, today.month, 1)
+    avg_end = current_month_start - relativedelta(days=1)  # último dia do mês anterior
+    avg_start = current_month_start - relativedelta(months=3)  # 3 meses antes
 
     avg_amount_col = getattr(Transaction, amount_col)
     avg_query = db.query(

@@ -51,7 +51,8 @@ export default function OrcamentoPage() {
   // Copy month state
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [copySource, setCopySource] = useState('');
-  const [copyTarget, setCopyTarget] = useState('');
+  const [copyTargetStart, setCopyTargetStart] = useState('');
+  const [copyTargetEnd, setCopyTargetEnd] = useState('');
 
   // Editing state
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
@@ -82,14 +83,30 @@ export default function OrcamentoPage() {
     },
   });
 
-  // Copy month mutation
+  // Copy month mutation — suporta intervalo de meses destino
   const copyMonthMutation = useMutation({
-    mutationFn: ({ source, target }: { source: string; target: string }) =>
-      budgetsApi.copyMonth(source, target),
+    mutationFn: async ({ source, targetStart, targetEnd }: { source: string; targetStart: string; targetEnd: string }) => {
+      // Gerar lista de meses no intervalo
+      const months: string[] = [];
+      const [sy, sm] = targetStart.split('-').map(Number);
+      const [ey, em] = targetEnd.split('-').map(Number);
+      let y = sy, m = sm;
+      while (y < ey || (y === ey && m <= em)) {
+        months.push(`${y}-${String(m).padStart(2, '0')}`);
+        m++;
+        if (m > 12) { m = 1; y++; }
+      }
+      let totalCopied = 0;
+      for (const target of months) {
+        const result = await budgetsApi.copyMonth(source, target);
+        totalCopied += result.copied_count;
+      }
+      return { copied_count: totalCopied, months_count: months.length };
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['budget-grid'] });
       setShowCopyDialog(false);
-      alert(`${data.copied_count} orçamento(s) copiado(s) com sucesso.`);
+      alert(`${data.copied_count} orçamento(s) copiado(s) para ${data.months_count} mês(es).`);
     },
   });
 
@@ -298,7 +315,8 @@ export default function OrcamentoPage() {
               variant="secondary"
               onClick={() => {
                 setCopySource('');
-                setCopyTarget('');
+                setCopyTargetStart('');
+                setCopyTargetEnd('');
                 setShowCopyDialog(true);
               }}
             >
@@ -418,7 +436,7 @@ export default function OrcamentoPage() {
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl z-50 w-96 p-6">
             <h3 className="text-lg font-bold text-gray-800 mb-4">Copiar Orçamento</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Copiar todos os valores orçados de um mês para outro.
+              Copiar todos os valores orçados de um mês para um intervalo de meses.
             </p>
             <div className="space-y-3">
               <Select
@@ -428,13 +446,27 @@ export default function OrcamentoPage() {
                 onChange={(e) => setCopySource(e.target.value)}
                 options={[{ value: '', label: 'Selecione...' }, ...monthOptions]}
               />
-              <Select
-                label="Mês Destino"
-                id="copy_target"
-                value={copyTarget}
-                onChange={(e) => setCopyTarget(e.target.value)}
-                options={[{ value: '', label: 'Selecione...' }, ...monthOptions]}
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  label="Destino Início"
+                  id="copy_target_start"
+                  value={copyTargetStart}
+                  onChange={(e) => {
+                    setCopyTargetStart(e.target.value);
+                    if (!copyTargetEnd || e.target.value > copyTargetEnd) {
+                      setCopyTargetEnd(e.target.value);
+                    }
+                  }}
+                  options={[{ value: '', label: 'Selecione...' }, ...monthOptions]}
+                />
+                <Select
+                  label="Destino Fim"
+                  id="copy_target_end"
+                  value={copyTargetEnd}
+                  onChange={(e) => setCopyTargetEnd(e.target.value)}
+                  options={[{ value: '', label: 'Selecione...' }, ...monthOptions.filter(o => !copyTargetStart || o.value >= copyTargetStart)]}
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="secondary" onClick={() => setShowCopyDialog(false)}>
@@ -442,12 +474,12 @@ export default function OrcamentoPage() {
               </Button>
               <Button
                 onClick={() => {
-                  if (copySource && copyTarget) {
-                    copyMonthMutation.mutate({ source: copySource, target: copyTarget });
+                  if (copySource && copyTargetStart && copyTargetEnd) {
+                    copyMonthMutation.mutate({ source: copySource, targetStart: copyTargetStart, targetEnd: copyTargetEnd });
                   }
                 }}
                 isLoading={copyMonthMutation.isPending}
-                disabled={!copySource || !copyTarget}
+                disabled={!copySource || !copyTargetStart || !copyTargetEnd}
               >
                 Copiar
               </Button>
