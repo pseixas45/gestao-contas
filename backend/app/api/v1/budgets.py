@@ -176,18 +176,20 @@ async def update_budget_cell(
     ref_date = date(year, month_num, 1)
     exchange_service = ExchangeService(db)
 
-    try:
-        if input_currency == CurrencyCode.BRL:
-            amount_usd = await exchange_service.convert(amount, CurrencyCode.BRL, CurrencyCode.USD, ref_date)
-            amount_eur = await exchange_service.convert(amount, CurrencyCode.BRL, CurrencyCode.EUR, ref_date)
-        elif input_currency == CurrencyCode.USD:
-            amount_brl = await exchange_service.convert(amount, CurrencyCode.USD, CurrencyCode.BRL, ref_date)
-            amount_eur = await exchange_service.convert(amount, CurrencyCode.USD, CurrencyCode.EUR, ref_date)
-        elif input_currency == CurrencyCode.EUR:
-            amount_brl = await exchange_service.convert(amount, CurrencyCode.EUR, CurrencyCode.BRL, ref_date)
-            amount_usd = await exchange_service.convert(amount, CurrencyCode.EUR, CurrencyCode.USD, ref_date)
-    except ValueError as e:
-        logger.warning(f"Erro ao buscar câmbio para orçamento: {e}")
+    # Só buscar câmbio se o valor não for zero e for necessário converter
+    if amount != Decimal("0.00"):
+        try:
+            if input_currency == CurrencyCode.BRL:
+                amount_usd = await exchange_service.convert(amount, CurrencyCode.BRL, CurrencyCode.USD, ref_date)
+                amount_eur = await exchange_service.convert(amount, CurrencyCode.BRL, CurrencyCode.EUR, ref_date)
+            elif input_currency == CurrencyCode.USD:
+                amount_brl = await exchange_service.convert(amount, CurrencyCode.USD, CurrencyCode.BRL, ref_date)
+                amount_eur = await exchange_service.convert(amount, CurrencyCode.USD, CurrencyCode.EUR, ref_date)
+            elif input_currency == CurrencyCode.EUR:
+                amount_brl = await exchange_service.convert(amount, CurrencyCode.EUR, CurrencyCode.BRL, ref_date)
+                amount_usd = await exchange_service.convert(amount, CurrencyCode.EUR, CurrencyCode.USD, ref_date)
+        except ValueError as e:
+            logger.warning(f"Erro ao buscar câmbio para orçamento: {e}")
 
     # Upsert
     existing = db.query(Budget).filter(

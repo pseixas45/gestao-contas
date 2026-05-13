@@ -57,7 +57,7 @@ export default function OrcamentoPage() {
   // Editing state
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [savingCell, setSavingCell] = useState(false);
+  const [savingCell] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Focus input when editing starts
@@ -75,12 +75,9 @@ export default function OrcamentoPage() {
     enabled: !!startMonth && !!endMonthState,
   });
 
-  // Update cell mutation
+  // Update cell mutation with optimistic update
   const updateCellMutation = useMutation({
     mutationFn: budgetsApi.updateCell,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['budget-grid'] });
-    },
   });
 
   // Copy month mutation — suporta intervalo de meses destino
@@ -118,21 +115,41 @@ export default function OrcamentoPage() {
 
   const handleCellSave = useCallback(async () => {
     if (!editingCell) return;
-    setSavingCell(true);
-    try {
-      const amount = parseDisplayValue(editValue);
-      await updateCellMutation.mutateAsync({
-        month: editingCell.month,
-        category_id: editingCell.categoryId,
-        amount,
-        currency,
-      });
-    } finally {
-      setSavingCell(false);
-      setEditingCell(null);
-      setEditValue('');
-    }
-  }, [editingCell, editValue, currency, updateCellMutation]);
+    const amount = parseDisplayValue(editValue);
+    const { categoryId, month } = editingCell;
+
+    // Optimistic update: atualizar cache local imediatamente
+    queryClient.setQueryData<BudgetGridResponse>(
+      ['budget-grid', startMonth, endMonthState, currency],
+      (old) => {
+        if (!old) return old;
+        const updateRows = (rows: BudgetGridResponse['expense_rows']) =>
+          rows.map(row => {
+            if (row.category_id !== categoryId) return row;
+            const newValues = { ...row.values, [month]: amount };
+            const newTotal = Object.values(newValues).reduce((s, v) => s + Number(v), 0);
+            return { ...row, values: newValues, total: newTotal };
+          });
+        return {
+          ...old,
+          expense_rows: updateRows(old.expense_rows),
+          income_rows: updateRows(old.income_rows),
+          transfer_rows: updateRows(old.transfer_rows),
+        };
+      }
+    );
+
+    setEditingCell(null);
+    setEditValue('');
+
+    // Salvar no backend em background (sem bloquear a UI)
+    updateCellMutation.mutate({
+      month,
+      category_id: categoryId,
+      amount,
+      currency,
+    });
+  }, [editingCell, editValue, currency, updateCellMutation, queryClient, startMonth, endMonthState]);
 
   const handleCellCancel = useCallback(() => {
     setEditingCell(null);
