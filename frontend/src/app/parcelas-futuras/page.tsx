@@ -48,10 +48,13 @@ export default function ParcelasFuturasPage() {
   const copyMutation = useMutation({
     mutationFn: (items: { month: string; category_id: number; amount_brl: number }[]) =>
       budgetsApi.copyProjectionsToBudget(items),
-    onSuccess: () => {
+    onSuccess: (data) => {
       setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 3000);
+      setTimeout(() => setCopySuccess(false), 5000);
       queryClient.invalidateQueries({ queryKey: ['budget-grid'] });
+    },
+    onError: (error) => {
+      alert(`Erro ao copiar: ${(error as Error).message}`);
     },
   });
 
@@ -128,20 +131,23 @@ export default function ParcelasFuturasPage() {
   }, [filteredRows]);
 
   const handleCopyToBudget = useCallback(() => {
-    if (!selectedCategories.size) return;
+    // Se nenhuma categoria selecionada, copiar todas
+    const selected = selectedCategories.size > 0
+      ? selectedCategories
+      : new Set(filteredRows.filter(r => r.category_id).map(r => r.category_id!));
+
     const items: { month: string; category_id: number; amount_brl: number }[] = [];
     for (const row of filteredRows) {
-      if (!row.category_id || !selectedCategories.has(row.category_id)) continue;
-      for (const [month, amount] of Object.entries(row.months)) {
-        if (amount > 0) {
-          items.push({ month, category_id: row.category_id, amount_brl: -amount });
-        }
+      if (!row.category_id || !selected.has(row.category_id)) continue;
+      for (const month of filteredMonths) {
+        const amount = row.months[month] || 0;
+        items.push({ month, category_id: row.category_id, amount_brl: -amount });
       }
     }
     if (items.length > 0) {
       copyMutation.mutate(items);
     }
-  }, [filteredRows, selectedCategories, copyMutation]);
+  }, [filteredRows, filteredMonths, selectedCategories, copyMutation]);
 
   return (
     <MainLayout>
@@ -162,7 +168,7 @@ export default function ParcelasFuturasPage() {
               <Button
                 onClick={handleCopyToBudget}
                 isLoading={copyMutation.isPending}
-                disabled={!selectedCategories.size || copySuccess}
+                disabled={!filteredRows.length || copySuccess}
               >
                 {copySuccess ? (
                   <><CheckCircle size={16} /> Copiado!</>
