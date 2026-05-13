@@ -693,6 +693,97 @@ class ReportService:
             grand_total=grand_total,
         )
 
+    def get_category_monthly_pivot_budget(
+        self,
+        start_month: str,
+        end_month: str,
+        currency: CurrencyCode = CurrencyCode.BRL,
+        category_ids: Optional[List[int]] = None,
+    ) -> CategoryMonthlyPivotReport:
+        """
+        Relatório pivô baseado em orçamento (budget).
+        Mesma estrutura do pivot de transações, mas usando dados do orçamento.
+        """
+        amount_col_name = f"amount_{currency.value.lower()}"
+        amount_col = getattr(Budget, amount_col_name)
+        months, _, _ = self._build_month_list(start_month, end_month)
+
+        query = self.db.query(
+            Budget.category_id,
+            Budget.month,
+            amount_col.label('total')
+        ).filter(
+            Budget.month >= start_month,
+            Budget.month <= end_month,
+        )
+
+        if category_ids:
+            real_cat_ids = [c for c in category_ids if c != 0]
+            if real_cat_ids:
+                query = query.filter(Budget.category_id.in_(real_cat_ids))
+
+        results = query.all()
+
+        all_categories = {c.id: c for c in self.db.query(Category).all()}
+
+        data = {}
+        for r in results:
+            cat_id = r.category_id
+            if cat_id not in data:
+                data[cat_id] = {}
+            data[cat_id][r.month] = r.total.quantize(Decimal("0.01")) if r.total else Decimal("0.00")
+
+        all_rows = []
+        for cat_id, month_values in data.items():
+            cat = all_categories.get(cat_id)
+            values = {}
+            total = Decimal("0.00")
+            for m in months:
+                val = month_values.get(m, Decimal("0.00"))
+                values[m] = val
+                total += val
+            cat_type = cat.type.value if cat and cat.type else "expense"
+            all_rows.append(CategoryMonthlyRow(
+                category_id=cat_id,
+                category_name=cat.name if cat else "Sem categoria",
+                category_type=cat_type,
+                category_color=cat.color if cat else None,
+                values=values,
+                total=total,
+            ))
+
+        expense_rows = sorted([r for r in all_rows if r.category_type == "expense"], key=lambda x: x.category_name.lower())
+        income_rows = sorted([r for r in all_rows if r.category_type == "income"], key=lambda x: x.category_name.lower())
+        transfer_rows = sorted([r for r in all_rows if r.category_type == "transfer"], key=lambda x: x.category_name.lower())
+
+        expense_totals = self._group_totals(expense_rows, months)
+        income_totals = self._group_totals(income_rows, months)
+        transfer_totals = self._group_totals(transfer_rows, months)
+
+        column_totals = {}
+        grand_total = Decimal("0.00")
+        for m in months:
+            net = (expense_totals.values.get(m, Decimal("0.00"))
+                   + income_totals.values.get(m, Decimal("0.00"))
+                   + transfer_totals.values.get(m, Decimal("0.00")))
+            column_totals[m] = net
+            grand_total += net
+
+        return CategoryMonthlyPivotReport(
+            start_month=start_month,
+            end_month=end_month,
+            currency=currency,
+            months=months,
+            expense_rows=expense_rows,
+            expense_totals=expense_totals,
+            income_rows=income_rows,
+            income_totals=income_totals,
+            transfer_rows=transfer_rows,
+            transfer_totals=transfer_totals,
+            column_totals=column_totals,
+            grand_total=grand_total,
+        )
+
     def get_transaction_details(
         self,
         start_month: str,

@@ -111,12 +111,19 @@ def get_category_monthly_pivot(
     currency: CurrencyCode = Query(CurrencyCode.BRL, description="Moeda para exibição"),
     account_ids: Optional[str] = Query(None, description="IDs das contas separados por vírgula"),
     category_ids: Optional[str] = Query(None, description="IDs das categorias separados por vírgula"),
+    source: str = Query("transactions", description="Fonte de dados: transactions ou budget"),
     db: Session = Depends(get_db)
 ):
     """Relatório pivô: categorias nas linhas, meses nas colunas."""
     service = ReportService(db)
     acc_ids = [int(x) for x in account_ids.split(",")] if account_ids else None
     cat_ids = [int(x) for x in category_ids.split(",")] if category_ids else None
+
+    if source == "budget":
+        return service.get_category_monthly_pivot_budget(
+            start_month, end_month, currency, cat_ids
+        )
+
     return service.get_category_monthly_pivot(
         start_month, end_month, currency, acc_ids, cat_ids
     )

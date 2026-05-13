@@ -37,6 +37,7 @@ interface Filters {
   currency: string;
   account_ids: number[];
   category_ids: number[];
+  source?: 'transactions' | 'budget';
 }
 
 export default function RelatoriosPage() {
@@ -95,6 +96,7 @@ export default function RelatoriosPage() {
       currency?: string;
       account_ids?: string;
       category_ids?: string;
+      source?: string;
     } = {
       start_month: filters.start_month,
       end_month: filters.end_month,
@@ -102,6 +104,7 @@ export default function RelatoriosPage() {
     };
     if (filters.account_ids.length > 0) params.account_ids = filters.account_ids.join(',');
     if (filters.category_ids.length > 0) params.category_ids = filters.category_ids.join(',');
+    if (filters.source === 'budget') params.source = 'budget';
     return params;
   }, [filters]);
 
@@ -115,8 +118,10 @@ export default function RelatoriosPage() {
   const currencyCode = (filters.currency || 'BRL') as 'BRL' | 'USD' | 'EUR';
   const amountField = filters.currency === 'USD' ? 'amount_usd' : filters.currency === 'EUR' ? 'amount_eur' : 'amount_brl';
 
-  // --- Drill-down ---
+  // --- Drill-down (não disponível para source=budget) ---
+  const isBudgetSource = filters.source === 'budget';
   const handleToggleCategory = useCallback(async (categoryId: number) => {
+    if (isBudgetSource) return;
     if (expandedCategories.has(categoryId)) {
       setExpandedCategories((prev) => {
         const next = new Set(prev);
@@ -139,7 +144,7 @@ export default function RelatoriosPage() {
     }
 
     setExpandedCategories((prev) => new Set(prev).add(categoryId));
-  }, [expandedCategories, categoryTransactions, queryParams]);
+  }, [expandedCategories, categoryTransactions, queryParams, isBudgetSource]);
 
   // Reset drill-down cache when filters change
   useEffect(() => {
@@ -177,13 +182,16 @@ export default function RelatoriosPage() {
       if (typeof parsed.account_ids === 'string') {
         parsed.account_ids = parsed.account_ids ? parsed.account_ids.split(',').map(Number) : [];
       }
-      // Período: sempre 4 últimos meses fechados (até mês atual - 1)
-      const now = new Date();
-      const endDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const startDate = new Date(endDate.getFullYear(), endDate.getMonth() - 3, 1);
-      const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      parsed.start_month = fmt(startDate);
-      parsed.end_month = fmt(endDate);
+      // Para views de transações: 4 últimos meses fechados
+      // Para views de budget: manter período salvo
+      if (parsed.source !== 'budget') {
+        const now = new Date();
+        const endDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const startDate = new Date(endDate.getFullYear(), endDate.getMonth() - 3, 1);
+        const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        parsed.start_month = fmt(startDate);
+        parsed.end_month = fmt(endDate);
+      }
       setFilters(parsed as Filters);
       setShowLoadMenu(false);
     } catch {}

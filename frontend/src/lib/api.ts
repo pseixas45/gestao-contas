@@ -548,6 +548,7 @@ export const reportsApi = {
     currency?: string;
     account_ids?: string;
     category_ids?: string;
+    source?: string;
   }): Promise<PivotReport> => {
     const response = await api.get('/reports/category-monthly-pivot', { params });
     return response.data;
