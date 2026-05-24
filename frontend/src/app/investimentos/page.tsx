@@ -198,7 +198,7 @@ export default function InvestimentosDashboardPage() {
 
             {/* Rendimento e Valor Líquido */}
             {(netValueData || monthlyYieldData) && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {monthlyYieldData && monthlyYieldData.length > 0 && (() => {
                   const last = monthlyYieldData[monthlyYieldData.length - 1];
                   return (
@@ -212,22 +212,13 @@ export default function InvestimentosDashboardPage() {
                   );
                 })()}
                 {netValueData && (
-                  <>
-                    <StatCard
-                      title="Valor Líquido (pós-IR)"
-                      value={formatCurrency(netValueData.total_net)}
-                      subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
-                      icon={Shield}
-                      color="sky"
-                    />
-                    <StatCard
-                      title="Valor Bruto"
-                      value={formatCurrency(netValueData.total_gross)}
-                      subtitle={`${data?.net_summary?.positions_count || 0} posições`}
-                      icon={Wallet}
-                      color="violet"
-                    />
-                  </>
+                  <StatCard
+                    title="Valor Líquido (pós-IR)"
+                    value={formatCurrency(netValueData.total_net)}
+                    subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
+                    icon={Shield}
+                    color="sky"
+                  />
                 )}
               </div>
             )}
