@@ -33,6 +33,22 @@ class AssetClassCode(str, enum.Enum):
     CAIXA = "caixa"                # Saldo em conta corretora
 
 
+class RateIndex(str, enum.Enum):
+    """Índice de remuneração do investimento."""
+    CDI = "CDI"
+    IPCA = "IPCA"
+    PRE = "PRE"
+    TR = "TR"
+    IGPM = "IGPM"
+    SELIC = "SELIC"
+
+
+class RateType(str, enum.Enum):
+    """Tipo de aplicação da taxa."""
+    PERCENTAGE = "percentage"  # Multiplicador: 100% CDI → spread=100
+    SPREAD = "spread"          # Aditivo: IPCA + 7% → spread=7
+
+
 class GoalType(str, enum.Enum):
     """Tipos de metas de investimento."""
     PORTFOLIO_TOTAL = "portfolio_total"        # Patrimônio total alvo
@@ -76,6 +92,14 @@ class Asset(Base):
     liquidity_days = Column(Integer)
     risk_level = Column(Integer)
     is_active = Column(Boolean, default=True)
+
+    # Estratégia de remuneração (para cálculo de valor na curva)
+    rate_index = Column(Enum(RateIndex), nullable=True)      # CDI, IPCA, PRE, etc.
+    rate_spread = Column(Numeric(10, 4), nullable=True)       # 100 (100% CDI), 7.0 (IPCA+7%)
+    rate_type = Column(Enum(RateType), nullable=True)         # percentage ou spread
+    application_date = Column(Date, nullable=True)            # Data de aplicação
+    maturity_date = Column(Date, nullable=True)               # Data de vencimento
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -97,11 +121,14 @@ class InvestmentSnapshot(Base):
     total_value = Column(Numeric(15, 2), nullable=False)  # Patrimônio total (R$)
     total_invested = Column(Numeric(15, 2))  # Capital aplicado (sem rendimentos)
     available_balance = Column(Numeric(15, 2), default=0)  # Saldo em caixa/conta
+    total_gross = Column(Numeric(15, 2))     # Soma valores brutos
+    total_net = Column(Numeric(15, 2))       # Soma valores líquidos (pós-IR)
 
     # Rentabilidades agregadas (vindas do extrato, opcionais)
     yield_month_pct = Column(Numeric(8, 4))  # Rentabilidade do mês
     yield_ytd_pct = Column(Numeric(8, 4))    # Year-to-date
     yield_total_pct = Column(Numeric(8, 4))  # Acumulada
+    yield_month_value = Column(Numeric(15, 2))  # Rendimento R$ no mês
 
     import_batch_id = Column(Integer, ForeignKey("import_batches.id"), nullable=True)
     notes = Column(String(500))
@@ -128,8 +155,10 @@ class InvestmentPosition(Base):
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
 
     # Valores
-    value = Column(Numeric(15, 2), nullable=False)  # Valor atual (R$)
+    value = Column(Numeric(15, 2), nullable=False)  # Valor atual / marcação a mercado (R$)
     value_invested = Column(Numeric(15, 2))         # Valor aplicado (capital)
+    value_gross = Column(Numeric(15, 2))            # Valor bruto (do extrato)
+    value_net = Column(Numeric(15, 2))              # Valor líquido (pós-IR, do extrato ou calculado)
     quantity = Column(Numeric(20, 8))               # Quantidade (cotas/ações)
     allocation_pct = Column(Numeric(8, 4))          # % do portfólio
 
@@ -137,8 +166,9 @@ class InvestmentPosition(Base):
     yield_net_pct = Column(Numeric(8, 4))           # Líquida (%)
     yield_gross_pct = Column(Numeric(8, 4))         # Bruta (%)
     yield_value = Column(Numeric(15, 2))            # Ganho R$ acumulado
+    yield_month_value = Column(Numeric(15, 2))      # Rendimento R$ no mês
 
-    # Específicos de renda fixa
+    # Específicos de renda fixa (mantidos para compatibilidade, fonte de verdade é Asset)
     maturity_date = Column(Date)                    # Vencimento
     contracted_rate = Column(String(50))            # Taxa contratada (ex: "100% CDI", "IPCA+5%")
 

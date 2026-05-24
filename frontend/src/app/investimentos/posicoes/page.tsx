@@ -262,7 +262,8 @@ export default function PosicoesPage() {
                               <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Valor (R$)</th>
                               <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Aportado</th>
                               <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Rent. (%)</th>
-                              <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Aloc.</th>
+                              <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Líquido</th>
+                              <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Rend. Mês</th>
                               <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Vencim.</th>
                               <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Taxa</th>
                             </tr>
@@ -282,7 +283,10 @@ export default function PosicoesPage() {
                                   <td className={`px-4 py-2.5 text-right tabular-nums ${(yPct || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                                     {yPct != null ? `${yPct >= 0 ? '+' : ''}${yPct.toFixed(2)}%` : '—'}
                                   </td>
-                                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{alloc != null ? `${alloc.toFixed(2)}%` : '—'}</td>
+                                  <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{p.value_net != null ? formatCurrency(Number(p.value_net)) : '—'}</td>
+                                  <td className={`px-4 py-2.5 text-right tabular-nums ${(p.yield_month_value || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                    {p.yield_month_value != null ? formatCurrency(Number(p.yield_month_value)) : '—'}
+                                  </td>
                                   <td className="px-4 py-2.5 text-slate-500 text-xs">{p.maturity_date ? formatDate(p.maturity_date) : '—'}</td>
                                   <td className="px-4 py-2.5 text-slate-500 text-xs">{p.contracted_rate || '—'}</td>
                                 </tr>
@@ -301,7 +305,7 @@ export default function PosicoesPage() {
                               <td className={`px-4 py-2.5 text-right text-sm font-bold tabular-nums ${yieldValue >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                                 {yieldPct !== null ? `${yieldPct >= 0 ? '+' : ''}${yieldPct.toFixed(2)}%` : '—'}
                               </td>
-                              <td colSpan={3}></td>
+                              <td colSpan={4}></td>
                             </tr>
                           </tfoot>
                         </table>

@@ -53,12 +53,14 @@ class _SnapshotCache:
         # Bancos
         self.banks_by_id = {b.id: b for b in db.query(Bank).all()}
 
-        # Snapshots (todas, ordenadas; ainda só para as contas relevantes)
+        # Snapshots (todas, ordenadas; apenas colunas escalares, sem lazy-load de positions)
         if not self.account_ids:
             self.snapshots: List[InvestmentSnapshot] = []
         else:
+            from sqlalchemy.orm import noload
             self.snapshots = (
                 db.query(InvestmentSnapshot)
+                .options(noload(InvestmentSnapshot.positions))
                 .filter(InvestmentSnapshot.account_id.in_(self.account_ids))
                 .order_by(InvestmentSnapshot.snapshot_date)
                 .all()

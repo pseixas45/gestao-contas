@@ -710,6 +710,11 @@ export interface Asset {
   liquidity_days: number | null;
   risk_level: number | null;
   is_active: boolean;
+  rate_index: string | null;
+  rate_spread: number | null;
+  rate_type: string | null;
+  application_date: string | null;
+  maturity_date: string | null;
 }
 
 export interface InvestmentSnapshot {
@@ -721,9 +726,12 @@ export interface InvestmentSnapshot {
   total_value: number;
   total_invested: number | null;
   available_balance: number | null;
+  total_gross: number | null;
+  total_net: number | null;
   yield_month_pct: number | null;
   yield_ytd_pct: number | null;
   yield_total_pct: number | null;
+  yield_month_value: number | null;
   notes: string | null;
   positions_count: number;
 }
@@ -738,13 +746,53 @@ export interface InvestmentPosition {
   snapshot_date: string | null;
   value: number;
   value_invested: number | null;
+  value_gross: number | null;
+  value_net: number | null;
   quantity: number | null;
   allocation_pct: number | null;
   yield_net_pct: number | null;
   yield_gross_pct: number | null;
   yield_value: number | null;
+  yield_month_value: number | null;
   maturity_date: string | null;
   contracted_rate: string | null;
+}
+
+export interface ProfitabilityPoint {
+  date: string;
+  market_value: number;
+  invested: number | null;
+  cdi_benchmark: number | null;
+}
+
+export interface NetValuePosition {
+  asset_name: string;
+  asset_class: string | null;
+  value_gross: number;
+  value_invested: number | null;
+  value_net: number;
+  ir_estimated: number;
+  days_held: number;
+  tax_info: {
+    ir_rate: number;
+    iof_rate: number;
+    exempt: boolean;
+    description: string;
+  };
+}
+
+export interface NetValueBreakdown {
+  positions: NetValuePosition[];
+  total_gross: number;
+  total_net: number;
+  total_ir: number;
+}
+
+export interface MonthlyYieldPoint {
+  date: string;
+  total_value: number;
+  yield_value: number;
+  yield_pct: number;
 }
 
 export interface InvestmentSnapshotDetail extends InvestmentSnapshot {
@@ -833,6 +881,8 @@ export interface InvestmentDashboard {
   allocation_by_class: AllocationItem[];
   allocation_by_bank: AllocationItem[];
   history: HistoryPoint[];
+  monthly_yield: MonthlyYieldPoint[];
+  net_summary: { total_gross: number; total_net: number; total_ir: number; positions_count: number } | null;
   exposure: ExposureData;
   risk: RiskSummary;
   liquidity: LiquidityBucket[];
@@ -955,7 +1005,7 @@ export const investmentsApi = {
   },
 
   // Upload
-  upload: async (file: File, accountId: number, provider: 'xp' | 'itau' | 'c6' = 'xp'): Promise<{ success: boolean; filename: string; snapshot_id: number; positions_count: number; total_value: number; snapshot_date: string }> => {
+  upload: async (file: File, accountId: number, provider: 'xp' | 'itau' | 'c6' | 'auto' = 'auto'): Promise<{ success: boolean; filename: string; snapshot_id: number; positions_count: number; total_value: number; snapshot_date: string }> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('account_id', accountId.toString());
@@ -963,6 +1013,27 @@ export const investmentsApi = {
     const response = await api.post('/investments/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
+    return response.data;
+  },
+
+  // Análises avançadas
+  profitability: async (accountId?: number): Promise<ProfitabilityPoint[]> => {
+    const response = await api.get('/investments/profitability', { params: accountId ? { account_id: accountId } : {} });
+    return response.data;
+  },
+
+  netValue: async (accountId?: number): Promise<NetValueBreakdown> => {
+    const response = await api.get('/investments/net-value', { params: accountId ? { account_id: accountId } : {} });
+    return response.data;
+  },
+
+  monthlyYield: async (accountId?: number): Promise<MonthlyYieldPoint[]> => {
+    const response = await api.get('/investments/monthly-yield', { params: accountId ? { account_id: accountId } : {} });
+    return response.data;
+  },
+
+  updateMarketData: async (): Promise<{ message: string; total_fetched: number }> => {
+    const response = await api.post('/investments/market-data/update');
     return response.data;
   },
 };

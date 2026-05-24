@@ -3,7 +3,7 @@ from pydantic import BaseModel, ConfigDict
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List
-from app.models.investment import AssetClassCode, GoalType
+from app.models.investment import AssetClassCode, GoalType, RateIndex, RateType
 
 
 # ===== AssetClass =====
@@ -30,6 +30,11 @@ class AssetCreate(BaseModel):
     isin: Optional[str] = None
     liquidity_days: Optional[int] = None
     risk_level: Optional[int] = None
+    rate_index: Optional[RateIndex] = None
+    rate_spread: Optional[Decimal] = None
+    rate_type: Optional[RateType] = None
+    application_date: Optional[date] = None
+    maturity_date: Optional[date] = None
 
 
 class AssetUpdate(BaseModel):
@@ -42,6 +47,11 @@ class AssetUpdate(BaseModel):
     liquidity_days: Optional[int] = None
     risk_level: Optional[int] = None
     is_active: Optional[bool] = None
+    rate_index: Optional[RateIndex] = None
+    rate_spread: Optional[Decimal] = None
+    rate_type: Optional[RateType] = None
+    application_date: Optional[date] = None
+    maturity_date: Optional[date] = None
 
 
 class AssetResponse(BaseModel):
@@ -57,6 +67,11 @@ class AssetResponse(BaseModel):
     liquidity_days: Optional[int] = None
     risk_level: Optional[int] = None
     is_active: bool
+    rate_index: Optional[str] = None
+    rate_spread: Optional[float] = None
+    rate_type: Optional[str] = None
+    application_date: Optional[date] = None
+    maturity_date: Optional[date] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -73,11 +88,14 @@ class InvestmentPositionResponse(BaseModel):
     snapshot_date: Optional[date] = None
     value: float
     value_invested: Optional[float] = None
+    value_gross: Optional[float] = None
+    value_net: Optional[float] = None
     quantity: Optional[float] = None
     allocation_pct: Optional[float] = None
     yield_net_pct: Optional[float] = None
     yield_gross_pct: Optional[float] = None
     yield_value: Optional[float] = None
+    yield_month_value: Optional[float] = None
     maturity_date: Optional[date] = None
     contracted_rate: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
@@ -106,9 +124,12 @@ class InvestmentSnapshotResponse(BaseModel):
     total_value: float
     total_invested: Optional[float] = None
     available_balance: Optional[float] = None
+    total_gross: Optional[float] = None
+    total_net: Optional[float] = None
     yield_month_pct: Optional[float] = None
     yield_ytd_pct: Optional[float] = None
     yield_total_pct: Optional[float] = None
+    yield_month_value: Optional[float] = None
     notes: Optional[str] = None
     positions_count: int = 0
     model_config = ConfigDict(from_attributes=True)

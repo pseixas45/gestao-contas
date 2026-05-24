@@ -21,7 +21,10 @@ from app.models.investment import (
     InvestmentPosition,
     InvestmentGoal,
     GoalType,
+    RateIndex,
+    RateType,
 )
+from app.models.market_data import MarketIndexCode, MarketIndexRate
 
 __all__ = [
     "User",
@@ -53,4 +56,8 @@ __all__ = [
     "InvestmentPosition",
     "InvestmentGoal",
     "GoalType",
+    "RateIndex",
+    "RateType",
+    "MarketIndexCode",
+    "MarketIndexRate",
 ]

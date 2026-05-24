@@ -70,6 +70,10 @@ export default function InvestimentosDashboardPage() {
     queryFn: () => investmentsApi.goalsProgress(),
   });
 
+  // net_summary e monthly_yield vêm direto do dashboard (sem queries extras)
+  const netValueData = data?.net_summary ? { total_gross: data.net_summary.total_gross, total_net: data.net_summary.total_net, total_ir: data.net_summary.total_ir, positions: [] as any[] } : null;
+  const monthlyYieldData = data?.monthly_yield as { date: string; total_value: number; yield_value: number; yield_pct: number }[] | undefined;
+
   if (isLoading || !data) {
     return (
       <MainLayout>
@@ -192,6 +196,42 @@ export default function InvestimentosDashboardPage() {
               />
             </div>
 
+            {/* Rendimento e Valor Líquido */}
+            {(netValueData || monthlyYieldData) && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {monthlyYieldData && monthlyYieldData.length > 0 && (() => {
+                  const last = monthlyYieldData[monthlyYieldData.length - 1];
+                  return (
+                    <StatCard
+                      title="Rendimento do Mês"
+                      value={formatCurrency(last.yield_value)}
+                      subtitle={`${last.yield_pct >= 0 ? '+' : ''}${last.yield_pct.toFixed(2)}%`}
+                      icon={TrendingUp}
+                      color={last.yield_value >= 0 ? 'emerald' : 'rose'}
+                    />
+                  );
+                })()}
+                {netValueData && (
+                  <>
+                    <StatCard
+                      title="Valor Líquido (pós-IR)"
+                      value={formatCurrency(netValueData.total_net)}
+                      subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
+                      icon={Shield}
+                      color="sky"
+                    />
+                    <StatCard
+                      title="Valor Bruto"
+                      value={formatCurrency(netValueData.total_gross)}
+                      subtitle={`${data?.net_summary?.positions_count || 0} posições`}
+                      icon={Wallet}
+                      color="violet"
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
             {/* Goals progress */}
             {goalsProgress && goalsProgress.length > 0 && (
               <Card>
@@ -272,6 +312,40 @@ export default function InvestimentosDashboardPage() {
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Rendimento Mensal */}
+              {monthlyYieldData && monthlyYieldData.length > 1 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Rendimento Mensal</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-72">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={monthlyYieldData.slice(1).map(d => ({
+                          month: formatMonthYear(d.date),
+                          Rendimento: d.yield_value,
+                          pct: d.yield_pct,
+                        }))}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                          <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                          <YAxis tickFormatter={(v) => formatCompactCurrency(v)} tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={70} />
+                          <Tooltip
+                            formatter={(v: number, name: string) => [formatCurrency(v), name]}
+                            labelFormatter={(label) => label}
+                            contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '13px' }}
+                          />
+                          <Bar dataKey="Rendimento" radius={[4, 4, 0, 0]}>
+                            {monthlyYieldData.slice(1).map((d, i) => (
+                              <Cell key={i} fill={d.yield_value >= 0 ? '#10b981' : '#f43f5e'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader>

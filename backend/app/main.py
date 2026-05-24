@@ -68,7 +68,7 @@ async def startup_event():
     """Evento de inicialização - criar dados iniciais."""
     from sqlalchemy.orm import Session
     from app.database import SessionLocal
-    from app.models import Bank, Category, CategoryType
+    from app.models import Bank, Category, CategoryType, AssetClass, AssetClassCode
 
     db: Session = SessionLocal()
 
@@ -117,11 +117,34 @@ async def startup_event():
                 db.add(cat)
             db.commit()
 
-        # Migração: adicionar colunas date_start/date_end em import_batches
+        # Seed asset classes se não existirem
+        if db.query(AssetClass).count() == 0:
+            asset_classes = [
+                AssetClass(code=AssetClassCode.RENDA_FIXA, name="Renda Fixa", color="#3B82F6", typical_liquidity_days=1, risk_level=1),
+                AssetClass(code=AssetClassCode.INFLACAO, name="Inflação", color="#F59E0B", typical_liquidity_days=1, risk_level=2),
+                AssetClass(code=AssetClassCode.PRE_FIXADO, name="Pré-Fixado", color="#8B5CF6", typical_liquidity_days=1, risk_level=2),
+                AssetClass(code=AssetClassCode.POS_FIXADO, name="Pós-Fixado", color="#10B981", typical_liquidity_days=1, risk_level=1),
+                AssetClass(code=AssetClassCode.MULTIMERCADO, name="Multimercado", color="#EC4899", typical_liquidity_days=30, risk_level=3),
+                AssetClass(code=AssetClassCode.RENDA_VARIAVEL, name="Renda Variável", color="#EF4444", typical_liquidity_days=3, risk_level=4),
+                AssetClass(code=AssetClassCode.FII, name="Fundos Imobiliários", color="#06B6D4", typical_liquidity_days=3, risk_level=3),
+                AssetClass(code=AssetClassCode.CRIPTO, name="Cripto", color="#F97316", typical_liquidity_days=0, risk_level=5),
+                AssetClass(code=AssetClassCode.CAMBIAL, name="Cambial", color="#14B8A6", typical_liquidity_days=1, risk_level=3),
+                AssetClass(code=AssetClassCode.PREVIDENCIA, name="Previdência", color="#6366F1", typical_liquidity_days=60, risk_level=2),
+                AssetClass(code=AssetClassCode.ALTERNATIVOS, name="Alternativos", color="#A855F7", typical_liquidity_days=360, risk_level=4),
+                AssetClass(code=AssetClassCode.CAIXA, name="Caixa", color="#64748B", typical_liquidity_days=0, risk_level=1),
+            ]
+            for ac in asset_classes:
+                db.add(ac)
+            db.commit()
+
+        # Migração: adicionar colunas novas
         _run_migrations(db)
 
         # Atualizar cotações de câmbio
         await _update_exchange_rates(db)
+
+        # Atualizar dados de mercado (CDI, IPCA)
+        await _update_market_data(db)
 
     finally:
         db.close()
@@ -141,6 +164,47 @@ def _run_migrations(db):
         db.execute(text("ALTER TABLE import_batches ADD COLUMN date_end DATE"))
         db.commit()
         logger.info("Migração concluída.")
+
+    # Migração: novos campos em assets
+    if "assets" in inspector.get_table_names():
+        asset_cols = [col["name"] for col in inspector.get_columns("assets")]
+        for col_name, col_type in [
+            ("rate_index", "VARCHAR(10)"),
+            ("rate_spread", "NUMERIC(10,4)"),
+            ("rate_type", "VARCHAR(20)"),
+            ("application_date", "DATE"),
+            ("maturity_date", "DATE"),
+        ]:
+            if col_name not in asset_cols:
+                logger.info(f"Migrando assets: adicionando {col_name}...")
+                db.execute(text(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type}"))
+        db.commit()
+
+    # Migração: novos campos em investment_snapshots
+    if "investment_snapshots" in inspector.get_table_names():
+        snap_cols = [col["name"] for col in inspector.get_columns("investment_snapshots")]
+        for col_name, col_type in [
+            ("total_gross", "NUMERIC(15,2)"),
+            ("total_net", "NUMERIC(15,2)"),
+            ("yield_month_value", "NUMERIC(15,2)"),
+        ]:
+            if col_name not in snap_cols:
+                logger.info(f"Migrando investment_snapshots: adicionando {col_name}...")
+                db.execute(text(f"ALTER TABLE investment_snapshots ADD COLUMN {col_name} {col_type}"))
+        db.commit()
+
+    # Migração: novos campos em investment_positions
+    if "investment_positions" in inspector.get_table_names():
+        pos_cols = [col["name"] for col in inspector.get_columns("investment_positions")]
+        for col_name, col_type in [
+            ("value_gross", "NUMERIC(15,2)"),
+            ("value_net", "NUMERIC(15,2)"),
+            ("yield_month_value", "NUMERIC(15,2)"),
+        ]:
+            if col_name not in pos_cols:
+                logger.info(f"Migrando investment_positions: adicionando {col_name}...")
+                db.execute(text(f"ALTER TABLE investment_positions ADD COLUMN {col_name} {col_type}"))
+        db.commit()
 
     # Backfill: preencher date_start/date_end de batches que não têm
     unfilled = db.execute(text(
@@ -204,3 +268,43 @@ async def _update_exchange_rates(db):
 
     except Exception as e:
         logger.error(f"Erro ao atualizar cotações: {e}")
+
+
+async def _update_market_data(db):
+    """Atualiza CDI e IPCA do BCB desde a última data disponível."""
+    from datetime import date, timedelta
+    from app.models.market_data import MarketIndexRate, MarketIndexCode
+    from app.services.market_data_service import MarketDataService
+
+    logger = logging.getLogger("market_data_update")
+
+    try:
+        latest = db.query(MarketIndexRate.date_ref).filter(
+            MarketIndexRate.index_code == MarketIndexCode.CDI
+        ).order_by(MarketIndexRate.date_ref.desc()).first()
+
+        if latest:
+            start_date = latest[0] + timedelta(days=1)
+        else:
+            # Primeira carga: buscar últimos 2 anos
+            start_date = date.today() - timedelta(days=730)
+
+        end_date = date.today()
+
+        if start_date > end_date:
+            logger.info(f"Dados de mercado já atualizados (última: {latest[0]})")
+            return
+
+        logger.info(f"Atualizando CDI/IPCA de {start_date} até {end_date}...")
+
+        service = MarketDataService(db)
+        stats = await service.update_rates_for_period(start_date, end_date)
+
+        logger.info(f"Dados de mercado atualizados: {stats['total_fetched']} registros")
+
+        if stats.get("errors"):
+            for err in stats["errors"][:5]:
+                logger.warning(f"  Erro: {err}")
+
+    except Exception as e:
+        logger.error(f"Erro ao atualizar dados de mercado: {e}")
