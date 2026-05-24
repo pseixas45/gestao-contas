@@ -533,13 +533,27 @@ def goals_progress(
 @router.get("/dashboard")
 def get_dashboard(
     account_id: Optional[int] = None,
+    month: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """Dados consolidados para o dashboard de investimentos.
 
-    Usa um único cache de snapshots/posições para evitar N+1.
+    Params:
+        month: filtro YYYY-MM (ex: 2026-03). Se informado, overview usa o último dia desse mês.
     """
+    # Determinar reference_date a partir do filtro de mês
+    import calendar
+    reference_date = None
+    if month:
+        try:
+            parts = month.split("-")
+            y, m = int(parts[0]), int(parts[1])
+            last_day = calendar.monthrange(y, m)[1]
+            reference_date = date(y, m, last_day)
+        except (ValueError, IndexError):
+            pass
+
     cache = analysis._SnapshotCache(db, account_id)
     history = analysis.get_history(db, account_id, cache=cache)
 
@@ -587,7 +601,7 @@ def get_dashboard(
         pass
 
     return {
-        "overview": analysis.get_portfolio_overview(db, account_id, cache=cache),
+        "overview": analysis.get_portfolio_overview(db, account_id, cache=cache, reference_date=reference_date),
         "allocation_by_class": analysis.get_allocation(db, account_id, "class", cache=cache),
         "allocation_by_bank": analysis.get_allocation(db, account_id, "bank", cache=cache),
         "history": history,

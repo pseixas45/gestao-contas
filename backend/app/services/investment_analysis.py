@@ -71,6 +71,22 @@ class _SnapshotCache:
         for s in self.snapshots:
             self._snaps_by_account[s.account_id].append(s)
 
+        # Preencher total_invested para contas que não têm:
+        # Regra: primeiro snapshot da conta define o capital base (total_invested = total_value).
+        # Snapshots seguintes herdam o anterior se não têm valor próprio.
+        for acc_id, snaps in self._snaps_by_account.items():
+            if not snaps:
+                continue
+            first = snaps[0]
+            if not first.total_invested:
+                # Capital base = patrimônio do primeiro snapshot
+                first.total_invested = first.total_value
+            prev_invested = first.total_invested
+            for s in snaps[1:]:
+                if not s.total_invested:
+                    s.total_invested = prev_invested
+                prev_invested = s.total_invested
+
         # Última snapshot por conta
         self._latest_by_account: Dict[int, InvestmentSnapshot] = {
             acc_id: snaps[-1] for acc_id, snaps in self._snaps_by_account.items() if snaps
@@ -128,42 +144,61 @@ class _SnapshotCache:
 # Patrimônio + variação
 # ============================================================
 
-def get_portfolio_overview(db: Session, account_id: Optional[int] = None, cache: Optional[_SnapshotCache] = None) -> Dict[str, Any]:
-    """Retorna patrimônio atual, variação no mês, rentabilidade e aporte do mês."""
+def get_portfolio_overview(
+    db: Session, account_id: Optional[int] = None,
+    cache: Optional[_SnapshotCache] = None,
+    reference_date: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Retorna patrimônio, variação no mês, rentabilidade e aporte.
+
+    Se reference_date for informado, calcula para aquela data (em vez do último snapshot).
+    """
     cache = cache or _SnapshotCache(db, account_id)
-    snaps = cache.latest_per_account()
+
+    # Se reference_date informado, usar snapshot mais recente <= reference_date por conta
+    if reference_date:
+        target_date = reference_date
+    else:
+        # Usar o último snapshot disponível
+        if cache.snapshots:
+            target_date = max(s.snapshot_date for s in cache.snapshots)
+        else:
+            target_date = date.today()
 
     total_value = Decimal("0")
     total_invested = Decimal("0")
     accounts_summary = []
-    snapshot_dates = []
 
-    for acc, snap in snaps:
-        if snap:
-            total_value += snap.total_value or Decimal("0")
-            total_invested += snap.total_invested or Decimal("0")
-            snapshot_dates.append(snap.snapshot_date)
+    for acc_id, snaps in cache._snaps_by_account.items():
+        chosen = None
+        for s in snaps:
+            if s.snapshot_date <= target_date:
+                chosen = s
+            else:
+                break
+        if chosen:
+            total_value += chosen.total_value or Decimal("0")
+            total_invested += chosen.total_invested or Decimal("0")
+            acc = cache.accounts_by_id.get(acc_id)
             accounts_summary.append({
-                "account_id": acc.id,
-                "account_name": acc.name,
-                "snapshot_date": snap.snapshot_date.isoformat(),
-                "total_value": float(snap.total_value or 0),
-                "total_invested": float(snap.total_invested or 0),
+                "account_id": acc_id,
+                "account_name": acc.name if acc else str(acc_id),
+                "snapshot_date": chosen.snapshot_date.isoformat(),
+                "total_value": float(chosen.total_value or 0),
+                "total_invested": float(chosen.total_invested or 0),
             })
 
     monthly_change = None
     monthly_change_pct = None
     monthly_contribution = None
-    if snapshot_dates:
-        max_date = max(snapshot_dates)
-        prev_target = max_date - timedelta(days=35)
-        prev_total = cache.sum_total_at_or_before(prev_target)
-        prev_invested = cache.sum_invested_at_or_before(prev_target)
-        if prev_total:
-            monthly_change = total_value - prev_total
-            monthly_change_pct = float(_safe_div(monthly_change, prev_total) * 100)
-        if prev_invested:
-            monthly_contribution = float((total_invested or Decimal("0")) - prev_invested)
+    prev_target = target_date - timedelta(days=35)
+    prev_total = cache.sum_total_at_or_before(prev_target)
+    prev_invested = cache.sum_invested_at_or_before(prev_target)
+    if prev_total:
+        monthly_change = total_value - prev_total
+        monthly_change_pct = float(_safe_div(monthly_change, prev_total) * 100)
+    if prev_invested:
+        monthly_contribution = float((total_invested or Decimal("0")) - prev_invested)
 
     return {
         "total_value": float(total_value),
@@ -173,6 +208,7 @@ def get_portfolio_overview(db: Session, account_id: Optional[int] = None, cache:
         "monthly_change": float(monthly_change) if monthly_change is not None else None,
         "monthly_change_pct": monthly_change_pct,
         "monthly_contribution": monthly_contribution,
+        "reference_date": target_date.isoformat(),
         "accounts": accounts_summary,
     }
 

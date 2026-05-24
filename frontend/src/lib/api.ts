@@ -833,6 +833,7 @@ export interface PortfolioOverview {
   monthly_change: number | null;
   monthly_change_pct: number | null;
   monthly_contribution: number | null;
+  reference_date: string | null;
   accounts: Array<{
     account_id: number;
     account_name: string;
@@ -959,8 +960,11 @@ export const investmentsApi = {
   },
 
   // Analyses
-  dashboard: async (accountId?: number): Promise<InvestmentDashboard> => {
-    const response = await api.get('/investments/dashboard', { params: { account_id: accountId } });
+  dashboard: async (accountId?: number, month?: string): Promise<InvestmentDashboard> => {
+    const params: Record<string, any> = {};
+    if (accountId) params.account_id = accountId;
+    if (month) params.month = month;
+    const response = await api.get('/investments/dashboard', { params });
     return response.data;
   },
 

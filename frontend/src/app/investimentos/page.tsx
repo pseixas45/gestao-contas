@@ -60,9 +60,11 @@ function formatMonthYear(iso: string): string {
 }
 
 export default function InvestimentosDashboardPage() {
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
+
   const { data, isLoading } = useQuery({
-    queryKey: ['investments-dashboard'],
-    queryFn: () => investmentsApi.dashboard(),
+    queryKey: ['investments-dashboard', selectedMonth],
+    queryFn: () => investmentsApi.dashboard(undefined, selectedMonth || undefined),
   });
 
   const { data: goalsProgress } = useQuery({
@@ -73,6 +75,9 @@ export default function InvestimentosDashboardPage() {
   // net_summary e monthly_yield vêm direto do dashboard (sem queries extras)
   const netValueData = data?.net_summary ? { total_gross: data.net_summary.total_gross, total_net: data.net_summary.total_net, total_ir: data.net_summary.total_ir, positions: [] as any[] } : null;
   const monthlyYieldData = data?.monthly_yield as { date: string; total_value: number; yield_value: number; yield_pct: number }[] | undefined;
+
+  // Gerar lista de meses disponíveis a partir do histórico
+  const availableMonths = data?.history?.map((h) => h.date.substring(0, 7)) || [];
 
   if (isLoading || !data) {
     return (
@@ -136,9 +141,21 @@ export default function InvestimentosDashboardPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Investimentos</h1>
-            <p className="text-slate-500 text-sm">Visão geral da sua carteira</p>
+            <p className="text-slate-500 text-sm">
+              {selectedMonth ? `Ref: ${formatMonthYear(selectedMonth + '-01')}` : 'Visão geral da sua carteira'}
+            </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 font-medium text-slate-700"
+            >
+              <option value="">Último mês</option>
+              {[...availableMonths].reverse().map((m) => (
+                <option key={m} value={m}>{formatMonthYear(m + '-01')}</option>
+              ))}
+            </select>
             <Link href="/investimentos/posicoes" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Posições</Link>
             <Link href="/investimentos/historico" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Histórico</Link>
             <Link href="/investimentos/metas" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Metas</Link>
@@ -200,7 +217,9 @@ export default function InvestimentosDashboardPage() {
             {(netValueData || monthlyYieldData) && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {monthlyYieldData && monthlyYieldData.length > 0 && (() => {
-                  const last = monthlyYieldData[monthlyYieldData.length - 1];
+                  // Se mês selecionado, buscar rendimento daquele mês; senão, último
+                  const targetMonth = selectedMonth || monthlyYieldData[monthlyYieldData.length - 1].date.substring(0, 7);
+                  const last = monthlyYieldData.find(d => d.date.startsWith(targetMonth)) || monthlyYieldData[monthlyYieldData.length - 1];
                   return (
                     <StatCard
                       title="Rendimento do Mês"

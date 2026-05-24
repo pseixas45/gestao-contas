@@ -67,8 +67,32 @@
 | `contracted_rate` (taxa) | sim | sim (CDB) | detectada do nome |
 | `application_date` | sim (RF) | sim (CDB) | **não** |
 
+## Bruto vs Líquido no cálculo de rendimento
+
+O rendimento mensal e a variação patrimonial usam `total_value` (valor reportado pelo banco),
+**não** o valor líquido (pós-IR). Isso é correto porque:
+
+1. **IR só incide no resgate** — enquanto o investimento está aplicado, o patrimônio cresce sem dedução de IR
+2. **Alíquota é regressiva** — o "líquido" de hoje será diferente amanhã mesmo sem variação de mercado (o tempo reduz a alíquota)
+3. **O banco reporta o valor bruto** — é o dado oficial do extrato e a referência para acompanhamento
+
+O **Valor Líquido (pós-IR)** no card é uma estimativa pontual ("se eu resgatasse tudo hoje, receberia X"). Não deve ser usado para calcular variação ou rendimento.
+
+## Capital base (total_invested)
+
+Para contas que não trazem `total_invested` do extrato (Itaú, C6):
+- O **primeiro snapshot** da conta define o capital base: `total_invested = total_value`
+- Snapshots seguintes herdam o `total_invested` anterior se não têm valor próprio
+- Isso significa que o rendimento acumulado começa em 0% na data do primeiro snapshot
+
+## Filtro de mês
+
+O dashboard aceita filtro `?month=YYYY-MM`. Quando informado:
+- Os cards (Patrimônio, Variação, Aporte) mostram dados daquele mês
+- O overview usa o snapshot mais recente <= último dia do mês
+- Histórico e gráficos continuam mostrando a série completa
+
 ## Pendências para melhorar a precisão
 
-1. **Itaú/C6 total_invested**: Os extratos não trazem esse valor consolidado. Possível solução: calcular a partir do histórico de aportes (delta entre snapshots quando sabemos que não houve rendimento significativo).
-2. **Rendimento do Mês sem aportes**: Para contas sem `total_invested`, o rendimento pode estar inflado por incluir aportes. Precisa de uma heurística ou dado externo.
-3. **C6 sem dados de posição detalhados**: O extrato C6 não traz valor investido, líquido, taxa, nem data de aplicação por produto. Apenas valor atual e rentabilidade %.
+1. **C6 sem dados de posição detalhados**: O extrato C6 não traz valor investido, líquido, taxa, nem data de aplicação por produto. Apenas valor atual e rentabilidade %.
+2. **Aportes para Itaú/C6**: Sem `total_invested` incremental, aportes novos após a data base não são rastreados. O rendimento pode ficar subestimado quando há aportes.
