@@ -112,12 +112,14 @@ class C6PdfParser:
         """c6 investimentos 2604.pdf -> date(2026, 4, 30)."""
         name = self.file_path.stem.lower()
 
-        # Padrão: C6-DD-MM-YYYY
+        # Padrão: C6-DD-MM-YYYY → usar último dia do mês (snapshot mensal)
         m = re.search(r"(\d{2})[-_](\d{2})[-_](\d{4})", name)
         if m:
             d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            import calendar
+            last_day = calendar.monthrange(y, mo)[1]
             try:
-                return date(y, mo, d)
+                return date(y, mo, last_day)
             except ValueError:
                 return None
 
