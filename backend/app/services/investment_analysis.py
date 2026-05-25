@@ -29,6 +29,127 @@ def _safe_div(num: Decimal, den: Decimal) -> Decimal:
     return num / den
 
 
+def _compute_yield_and_contribution(
+    db: Session,
+    curr_snapshot: "InvestmentSnapshot",
+    prev_snapshot: Optional["InvestmentSnapshot"],
+) -> Tuple[Decimal, Decimal]:
+    """Calcula rendimento e aporte entre dois snapshots da mesma conta.
+
+    Estratégia:
+    - Compara posições por asset_id para detectar novas/removidas
+    - Posições que se mantêm: Δ valor = rendimento
+    - Posições novas com value_invested: rendimento = valor - invested, aporte = invested
+    - Posições novas sem value_invested: trata como aporte
+    - Posições removidas com value_invested: resgate do invested
+    - Posições removidas sem value_invested: resgate do valor
+
+    Se não há snapshot anterior (conta nova): todo valor = aporte, rendimento = 0.
+
+    Retorna (rendimento, aporte).
+    """
+    curr_val = curr_snapshot.total_value or Decimal("0")
+
+    if not prev_snapshot:
+        # Conta nova: todo valor é aporte
+        return Decimal("0"), curr_val
+
+    prev_val = prev_snapshot.total_value or Decimal("0")
+
+    # Carregar posições dos dois snapshots
+    curr_positions = (
+        db.query(InvestmentPosition)
+        .filter(InvestmentPosition.snapshot_id == curr_snapshot.id)
+        .all()
+    )
+    prev_positions = (
+        db.query(InvestmentPosition)
+        .filter(InvestmentPosition.snapshot_id == prev_snapshot.id)
+        .all()
+    )
+
+    # Se algum snapshot não tem posições, usar delta de total como rendimento
+    if not curr_positions or not prev_positions:
+        return curr_val - prev_val, Decimal("0")
+
+    # Agrupar por asset_id (pode haver duplicatas — ex: 2 CDBs do mesmo emissor)
+    from collections import defaultdict
+    prev_by_asset: Dict[int, List] = defaultdict(list)
+    for p in prev_positions:
+        prev_by_asset[p.asset_id].append(p)
+
+    rendimento = Decimal("0")
+    aporte = Decimal("0")
+    # Track consumed prev positions
+    consumed_prev: Dict[int, int] = defaultdict(int)  # asset_id -> count consumed
+
+    # Sort curr positions by value (match larger first for duplicate assets)
+    for pos in sorted(curr_positions, key=lambda p: -(p.value or Decimal("0"))):
+        pos_val = pos.value or Decimal("0")
+        prev_list = prev_by_asset.get(pos.asset_id, [])
+        idx = consumed_prev[pos.asset_id]
+
+        if idx < len(prev_list):
+            # Match with prev position (by order)
+            prev_pos = sorted(prev_list, key=lambda p: -(p.value or Decimal("0")))[idx]
+            consumed_prev[pos.asset_id] += 1
+            rendimento += pos_val - (prev_pos.value or Decimal("0"))
+        else:
+            # Posição nova (ou duplicata extra)
+            if pos.value_invested is not None:
+                rendimento += pos_val - pos.value_invested
+                aporte += pos.value_invested
+            else:
+                aporte += pos_val
+
+    # Posições prev não consumidas (resgatadas)
+    for asset_id, prev_list in prev_by_asset.items():
+        remaining = len(prev_list) - consumed_prev[asset_id]
+        if remaining > 0:
+            sorted_prev = sorted(prev_list, key=lambda p: -(p.value or Decimal("0")))
+            for prev_pos in sorted_prev[consumed_prev[asset_id]:]:
+                if prev_pos.value_invested is not None:
+                    aporte -= prev_pos.value_invested
+                else:
+                    aporte -= prev_pos.value or Decimal("0")
+
+    # Detectar possíveis renomeações: se novas posições sem value_invested
+    # e posições removidas sem value_invested somam valores similares,
+    # provavelmente são o mesmo fundo com nome diferente.
+    # Nesse caso, reclassificar essas entradas/saídas como rendimento.
+    new_no_inv = Decimal("0")  # valor de posições novas sem value_invested
+    gone_no_inv = Decimal("0")  # valor de posições removidas sem value_invested
+    all_prev_aids = set(prev_by_asset.keys())
+    for pos in curr_positions:
+        if pos.asset_id not in all_prev_aids and pos.value_invested is None:
+            new_no_inv += pos.value or Decimal("0")
+    for asset_id, prev_list in prev_by_asset.items():
+        remaining = len(prev_list) - consumed_prev.get(asset_id, 0)
+        if remaining > 0:
+            sorted_prev = sorted(prev_list, key=lambda p: -(p.value or Decimal("0")))
+            for prev_pos in sorted_prev[consumed_prev.get(asset_id, 0):]:
+                if prev_pos.value_invested is None:
+                    gone_no_inv += prev_pos.value or Decimal("0")
+
+    if new_no_inv > 0 and gone_no_inv > 0:
+        # Provavelmente renomeações — cancelar essas entradas/saídas
+        # e redistribuir como rendimento (delta entre valores novos e antigos)
+        rendimento += new_no_inv - gone_no_inv
+        aporte -= new_no_inv  # remover do aporte
+        aporte += gone_no_inv  # remover resgate
+
+    # Sanity check final: se ainda diverge muito, fallback para delta total
+    sum_curr = sum((p.value or Decimal("0")) for p in curr_positions)
+    sum_prev = sum((p.value or Decimal("0")) for p in prev_positions)
+    delta_positions = sum_curr - sum_prev
+    computed_total = rendimento + aporte
+    divergencia = abs(computed_total - delta_positions)
+    if sum_prev > 0 and divergencia > sum_prev * Decimal("0.01"):
+        return curr_val - prev_val, Decimal("0")
+
+    return rendimento, aporte
+
+
 # ============================================================
 # Cache de dados (uma carga consolidada por chamada)
 # ============================================================
@@ -191,14 +312,33 @@ def get_portfolio_overview(
     monthly_change = None
     monthly_change_pct = None
     monthly_contribution = None
-    prev_target = target_date - timedelta(days=35)
-    prev_total = cache.sum_total_at_or_before(prev_target)
-    prev_invested = cache.sum_invested_at_or_before(prev_target)
-    if prev_total:
-        monthly_change = total_value - prev_total
-        monthly_change_pct = float(_safe_div(monthly_change, prev_total) * 100)
-    if prev_invested:
-        monthly_contribution = float((total_invested or Decimal("0")) - prev_invested)
+    # Usar último dia do mês anterior como referência
+    first_of_month = target_date.replace(day=1)
+    prev_target = first_of_month - timedelta(days=1)  # último dia do mês anterior
+    # Calcular rendimento e aporte por comparação de posições
+    total_rendimento = Decimal("0")
+    total_aporte = Decimal("0")
+    prev_total = Decimal("0")
+    for acc_id, snaps in cache._snaps_by_account.items():
+        curr_snap = None
+        prev_snap = None
+        for s in snaps:
+            if s.snapshot_date <= target_date:
+                curr_snap = s
+            if s.snapshot_date <= prev_target:
+                prev_snap = s
+        if not curr_snap:
+            continue
+        if prev_snap:
+            prev_total += prev_snap.total_value or Decimal("0")
+        rendimento, aporte = _compute_yield_and_contribution(db, curr_snap, prev_snap)
+        total_rendimento += rendimento
+        total_aporte += aporte
+    if prev_total or total_rendimento:
+        monthly_change = total_rendimento
+        base = prev_total if prev_total else total_invested
+        monthly_change_pct = float(_safe_div(monthly_change, base) * 100) if base else None
+    monthly_contribution = float(total_aporte)
 
     return {
         "total_value": float(total_value),
@@ -222,21 +362,42 @@ def get_history(db: Session, account_id: Optional[int] = None, cache: Optional[_
     cache = cache or _SnapshotCache(db, account_id)
 
     series = []
-    prev_total: Optional[Decimal] = None
+    prev_date: Optional[date] = None
     for d in cache.distinct_dates:
         total = cache.sum_total_at_or_before(d)
         invested = cache.sum_invested_at_or_before(d)
         change_pct = None
-        if prev_total and prev_total > 0:
-            change_pct = float(_safe_div(total - prev_total, prev_total) * 100)
+        month_rendimento = Decimal("0")
+        month_aporte = Decimal("0")
+        prev_total_comp = Decimal("0")
+        if prev_date:
+            for acc_id, snaps in cache._snaps_by_account.items():
+                curr_snap = None
+                prev_snap = None
+                for s in snaps:
+                    if s.snapshot_date <= d:
+                        curr_snap = s
+                    if s.snapshot_date <= prev_date:
+                        prev_snap = s
+                if not curr_snap:
+                    continue
+                if prev_snap:
+                    prev_total_comp += prev_snap.total_value or Decimal("0")
+                rendimento, aporte = _compute_yield_and_contribution(db, curr_snap, prev_snap)
+                month_rendimento += rendimento
+                month_aporte += aporte
+            if prev_total_comp > 0:
+                change_pct = float(_safe_div(month_rendimento, prev_total_comp) * 100)
         series.append({
             "date": d.isoformat(),
             "total_value": float(total),
             "total_invested": float(invested),
             "yield_value": float(total - invested) if invested else float(total),
             "monthly_change_pct": change_pct,
+            "monthly_yield_value": float(month_rendimento),
+            "monthly_contribution": float(month_aporte),
         })
-        prev_total = total
+        prev_date = d
     return series
 
 

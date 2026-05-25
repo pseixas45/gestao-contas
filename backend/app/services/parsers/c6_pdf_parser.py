@@ -35,43 +35,29 @@ class C6PdfParser:
         self.file_path = Path(file_path)
 
     def parse(self) -> ParsedSnapshot:
+        """Parse retornando apenas o último mês (compatibilidade)."""
+        snapshots = self.parse_all_months()
+        if not snapshots:
+            raise ValueError(f"Nenhum snapshot extraído de {self.file_path.name}")
+        return snapshots[-1]
+
+    def parse_all_months(self) -> List[ParsedSnapshot]:
+        """Parse retornando snapshots de todos os meses presentes no PDF."""
         try:
             import pdfplumber
         except ImportError:
             raise RuntimeError("pdfplumber não instalado. pip install pdfplumber")
 
-        snapshot_date = self._extract_date_from_filename()
-        positions: List[ParsedPosition] = []
-        total_value = None
-        yield_month_pct_total = None
+        import calendar
 
-        # Tabela de rentabilidade por produto: nome -> {month_pct, acum_periodo, acum_ano}
-        rent_table: Dict[str, Dict[str, Any]] = {}
+        # positions_by_month: {date -> [positions]}
+        positions_by_month: Dict[date, List[ParsedPosition]] = {}
+        # totals_by_month: {date -> Decimal} (da linha Renda Fixa / Total)
+        totals_by_month: Dict[date, Decimal] = {}
+        # rent_by_month: {date -> {name_norm -> {month_pct}}}
+        rent_by_month: Dict[date, Dict[str, Dict[str, Any]]] = {}
 
         with pdfplumber.open(self.file_path) as pdf:
-            pages_text = [p.extract_text() or "" for p in pdf.pages]
-
-            # Extrair patrimônio final
-            for text in pages_text:
-                m = re.search(r"Patrim[^:]*:\s*R\$\s*([\d.,]+)", text)
-                if m:
-                    total_value = parse_money(m.group(1))
-                    break
-
-            # Extrair data do snapshot dos headers de mês (último mês na tabela)
-            # Se não extraiu do filename, usar a data do relatório
-            if not snapshot_date:
-                for text in pages_text:
-                    m = re.search(r"(\d{2}/\d{2}/\d{4})", text[:200])
-                    if m:
-                        from app.services.parsers.base import parse_date_br
-                        snapshot_date = parse_date_br(m.group(1))
-                        break
-
-            if not snapshot_date:
-                raise ValueError(f"Não foi possível extrair data do arquivo: {self.file_path.name}")
-
-            # Parse tabelas de posição e rentabilidade
             for page in pdf.pages:
                 tables = page.extract_tables() or []
                 for tbl in tables:
@@ -79,34 +65,44 @@ class C6PdfParser:
                         continue
                     header = tbl[0]
 
-                    # Detectar tabela de posição (headers são meses: MAI/25, JUN/25, ...)
                     if self._is_position_table(header, tbl):
-                        self._parse_position_table(tbl, positions)
-
-                    # Detectar tabela de rentabilidade (tem coluna ACUMULADO)
+                        self._parse_position_table_all_months(tbl, positions_by_month, totals_by_month)
                     elif self._is_rent_table(header):
-                        self._parse_rent_table(tbl, rent_table)
+                        self._parse_rent_table_all_months(tbl, rent_by_month)
 
-        # Enriquecer posições com rentabilidade
-        for pos in positions:
-            name_norm = pos.get("name_normalized", "")
-            if name_norm in rent_table:
-                data = rent_table[name_norm]
-                if data.get("month_pct") is not None:
-                    pos["yield_gross_pct"] = data["month_pct"]
+        # Montar snapshots por mês
+        snapshots: List[ParsedSnapshot] = []
+        for snap_date in sorted(positions_by_month.keys()):
+            positions = positions_by_month[snap_date]
+            if not positions:
+                continue
 
-        # Calcular allocation_pct
-        if total_value and total_value > 0:
+            # Usar total da linha "Renda Fixa" se disponível, senão somar posições
+            total_value = totals_by_month.get(snap_date) or sum(p["value"] for p in positions)
+
+            # Enriquecer com rentabilidade
+            rent_table = rent_by_month.get(snap_date, {})
             for pos in positions:
-                pos["allocation_pct"] = (pos["value"] / total_value * 100).quantize(Decimal("0.01"))
+                name_norm = pos.get("name_normalized", "")
+                if name_norm in rent_table:
+                    data = rent_table[name_norm]
+                    if data.get("month_pct") is not None:
+                        pos["yield_gross_pct"] = data["month_pct"]
 
-        return ParsedSnapshot(
-            snapshot_date=snapshot_date,
-            total_value=total_value or sum(p["value"] for p in positions),
-            total_invested=None,
-            available_balance=Decimal("0"),
-            positions=positions,
-        )
+            # Calcular allocation_pct
+            if total_value and total_value > 0:
+                for pos in positions:
+                    pos["allocation_pct"] = (pos["value"] / total_value * 100).quantize(Decimal("0.01"))
+
+            snapshots.append(ParsedSnapshot(
+                snapshot_date=snap_date,
+                total_value=total_value,
+                total_invested=None,
+                available_balance=Decimal("0"),
+                positions=positions,
+            ))
+
+        return snapshots
 
     def _extract_date_from_filename(self) -> Optional[date]:
         """c6 investimentos 2604.pdf -> date(2026, 4, 30)."""
@@ -172,100 +168,132 @@ class C6PdfParser:
         return "ACUMULADO" in header_text and "PER" in header_text
 
     def _parse_position_table(self, tbl: List[List], positions: List[ParsedPosition]):
-        """Extrai posições da tabela de posição por produto."""
+        """Extrai posições da tabela de posição por produto (último mês apenas)."""
+        positions_by_month: Dict[date, List[ParsedPosition]] = {}
+        self._parse_position_table_all_months(tbl, positions_by_month)
+        if positions_by_month:
+            last_date = max(positions_by_month.keys())
+            positions.extend(positions_by_month[last_date])
+
+    def _parse_position_table_all_months(self, tbl: List[List], positions_by_month: Dict[date, List[ParsedPosition]], totals_by_month: Optional[Dict[date, Decimal]] = None):
+        """Extrai posições de TODOS os meses da tabela."""
+        import calendar
         header = tbl[0]
 
-        # Encontrar índice da última coluna de mês
-        last_month_idx = None
-        for idx in range(len(header) - 1, -1, -1):
-            cell = str(header[idx] or "").strip().upper()
-            if re.match(r"[A-Z]{3}/\d{2}", cell):
-                last_month_idx = idx
-                break
+        # Mapear índices de coluna -> data do snapshot
+        month_columns: List[tuple] = []  # (idx, date)
+        for idx, cell in enumerate(header):
+            cell_str = str(cell or "").strip().upper()
+            m = re.match(r"([A-Z]{3})/(\d{2})", cell_str)
+            if m:
+                month_num = MONTH_ABBR.get(m.group(1))
+                year = 2000 + int(m.group(2))
+                if month_num:
+                    last_day = calendar.monthrange(year, month_num)[1]
+                    snap_date = date(year, month_num, last_day)
+                    month_columns.append((idx, snap_date))
 
-        if last_month_idx is None:
+        if not month_columns:
             return
 
         for row in tbl[1:]:
-            if not row or len(row) <= last_month_idx:
+            if not row:
                 continue
 
             name = self._clean_name(row[0])
             if not name:
                 continue
 
-            # Pular linhas de total e subtotal
             name_lower = name.lower()
+            # Capturar totais da linha de subtotal (Renda Fixa, Total, etc.)
             if name_lower in ("total", "renda fixa", "renda variavel", "renda variável", "total geral"):
+                if totals_by_month is not None:
+                    for col_idx, snap_date in month_columns:
+                        if col_idx >= len(row):
+                            continue
+                        cell = str(row[col_idx] or "").strip()
+                        m_val = re.search(r"R?\$?\s*([\d.][\d.,]*)", cell)
+                        if m_val:
+                            val = parse_money(m_val.group(1))
+                            if val and val > 0:
+                                # Usar o maior total encontrado (ex: "Renda Fixa" inclui tudo)
+                                if snap_date not in totals_by_month or val > totals_by_month[snap_date]:
+                                    totals_by_month[snap_date] = val
                 continue
 
-            # Extrair valor da última coluna de mês
-            cell = str(row[last_month_idx] or "").strip()
-            if not cell or cell == "-":
-                continue
-
-            # Extrair R$ e % do cell (formato "R$ 54.154,06\n(34,37%)")
-            m_val = re.search(r"R?\$?\s*([\d.][\d.,]*)", cell)
-            if not m_val:
-                continue
-            value = parse_money(m_val.group(1))
-            if not value or value <= 0:
-                continue
-
-            # Extrair allocation_pct do cell
-            m_pct = re.search(r"\(([\d,]+)%\)", cell)
-            alloc = parse_pct(m_pct.group(1) + "%") if m_pct else None
-
-            # Classificar ativo
             asset_class = self._classify_product(name)
-
-            # Detectar taxa do nome
             rate_index, rate_spread, rate_type = self._detect_rate_from_name(name)
 
-            positions.append(ParsedPosition(
-                name=name,
-                name_normalized=normalize_name(name),
-                asset_class=asset_class,
-                value=value,
-                value_invested=None,
-                value_gross=None,
-                value_net=None,
-                quantity=None,
-                allocation_pct=alloc,
-                yield_net_pct=None,
-                yield_gross_pct=None,
-                yield_value=None,
-                yield_month_value=None,
-                maturity_date=None,
-                contracted_rate=None,
-                rate_index=rate_index,
-                rate_spread=rate_spread,
-                rate_type=rate_type,
-                application_date=None,
-            ))
+            for col_idx, snap_date in month_columns:
+                if col_idx >= len(row):
+                    continue
+                cell = str(row[col_idx] or "").strip()
+                if not cell or cell == "-":
+                    continue
+
+                m_val = re.search(r"R?\$?\s*([\d.][\d.,]*)", cell)
+                if not m_val:
+                    continue
+                value = parse_money(m_val.group(1))
+                if not value or value <= 0:
+                    continue
+
+                m_pct = re.search(r"\(([\d,]+)%\)", cell)
+                alloc = parse_pct(m_pct.group(1) + "%") if m_pct else None
+
+                if snap_date not in positions_by_month:
+                    positions_by_month[snap_date] = []
+
+                positions_by_month[snap_date].append(ParsedPosition(
+                    name=name,
+                    name_normalized=normalize_name(name),
+                    asset_class=asset_class,
+                    value=value,
+                    value_invested=None,
+                    value_gross=None,
+                    value_net=None,
+                    quantity=None,
+                    allocation_pct=alloc,
+                    yield_net_pct=None,
+                    yield_gross_pct=None,
+                    yield_value=None,
+                    yield_month_value=None,
+                    maturity_date=None,
+                    contracted_rate=None,
+                    rate_index=rate_index,
+                    rate_spread=rate_spread,
+                    rate_type=rate_type,
+                    application_date=None,
+                ))
 
     def _parse_rent_table(self, tbl: List[List], rent_table: Dict[str, Dict]):
-        """Extrai rentabilidade por produto."""
+        """Extrai rentabilidade por produto (último mês apenas, compatibilidade)."""
+        rent_by_month: Dict[date, Dict[str, Dict[str, Any]]] = {}
+        self._parse_rent_table_all_months(tbl, rent_by_month)
+        if rent_by_month:
+            last_date = max(rent_by_month.keys())
+            rent_table.update(rent_by_month[last_date])
+
+    def _parse_rent_table_all_months(self, tbl: List[List], rent_by_month: Dict[date, Dict[str, Dict[str, Any]]]):
+        """Extrai rentabilidade de TODOS os meses."""
+        import calendar
         header = tbl[0]
 
-        # Encontrar última coluna de mês (antes de ACUMULADO)
-        last_month_idx = None
-        for idx in range(len(header) - 1, -1, -1):
-            cell = str(header[idx] or "").strip().upper()
-            if re.match(r"[A-Z]{3}/\d{2}", cell):
-                last_month_idx = idx
-                break
-
-        # Encontrar colunas de acumulado
-        acum_periodo_idx = None
-        acum_ano_idx = None
+        # Mapear colunas de meses
+        month_columns: List[tuple] = []  # (idx, date)
         for idx, cell in enumerate(header):
-            cell_str = str(cell or "").upper()
-            if "ACUMULADO" in cell_str:
-                if "PER" in cell_str:
-                    acum_periodo_idx = idx
-                elif "ANO" in cell_str:
-                    acum_ano_idx = idx
+            cell_str = str(cell or "").strip().upper()
+            m = re.match(r"([A-Z]{3})/(\d{2})", cell_str)
+            if m:
+                month_num = MONTH_ABBR.get(m.group(1))
+                year = 2000 + int(m.group(2))
+                if month_num:
+                    last_day = calendar.monthrange(year, month_num)[1]
+                    snap_date = date(year, month_num, last_day)
+                    month_columns.append((idx, snap_date))
+
+        if not month_columns:
+            return
 
         for row in tbl[1:]:
             if not row:
@@ -281,14 +309,14 @@ class C6PdfParser:
 
             name_norm = normalize_name(name)
 
-            # Rentabilidade do mês
-            month_pct = None
-            if last_month_idx and last_month_idx < len(row):
-                month_pct = parse_pct(row[last_month_idx])
-
-            rent_table[name_norm] = {
-                "month_pct": month_pct,
-            }
+            for col_idx, snap_date in month_columns:
+                if col_idx >= len(row):
+                    continue
+                month_pct = parse_pct(row[col_idx])
+                if month_pct is not None:
+                    if snap_date not in rent_by_month:
+                        rent_by_month[snap_date] = {}
+                    rent_by_month[snap_date][name_norm] = {"month_pct": month_pct}
 
     def _clean_name(self, cell: Any) -> str:
         """Limpa nome de produto (remove \n e espaços extras)."""

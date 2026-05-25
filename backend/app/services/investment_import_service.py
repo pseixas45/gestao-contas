@@ -32,6 +32,17 @@ class InvestmentImportService:
             provider = self._detect_provider(file_path)
 
         parser = self._get_parser(provider, file_path)
+
+        # C6 pode ter múltiplos meses num único PDF
+        if provider == "c6" and hasattr(parser, "parse_all_months"):
+            snapshots = parser.parse_all_months()
+            if not snapshots:
+                raise ValueError(f"Nenhum snapshot extraído de {Path(file_path).name}")
+            result = None
+            for snap_data in snapshots:
+                result = self._import_single_snapshot(snap_data, file_path, account_id)
+            return result  # retorna info do último snapshot
+
         return self._import_with_parser(parser, file_path, account_id)
 
     def import_xp_file(self, file_path: str, account_id: int) -> Dict[str, Any]:
@@ -64,6 +75,13 @@ class InvestmentImportService:
         else:
             raise ValueError(f"Provider desconhecido: {provider}")
 
+    def _import_single_snapshot(self, data, file_path: str, account_id: int) -> Dict[str, Any]:
+        """Importa um único ParsedSnapshot para o banco."""
+        account = self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
+        if not account:
+            raise ValueError(f"Conta {account_id} não encontrada")
+        return self._save_parsed_data(data, file_path, account_id)
+
     def _import_with_parser(self, parser, file_path: str, account_id: int) -> Dict[str, Any]:
         """Lógica comum para qualquer parser."""
         account = self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
@@ -72,6 +90,10 @@ class InvestmentImportService:
 
         # Parse
         data = parser.parse()
+        return self._save_parsed_data(data, file_path, account_id)
+
+    def _save_parsed_data(self, data, file_path: str, account_id: int) -> Dict[str, Any]:
+        """Salva um ParsedSnapshot no banco (cria batch, snapshot, posições)."""
 
         # Cache de AssetClass
         class_cache: Dict[AssetClassCode, AssetClass] = {}
