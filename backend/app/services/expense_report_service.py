@@ -66,8 +66,8 @@ class ExpenseReportService:
                 id=t.id,
                 date=t.date,
                 description=t.description,
-                amount_brl=abs(t.amount_brl),
-                original_amount=abs(t.original_amount),
+                amount_brl=t.amount_brl,
+                original_amount=t.original_amount,
                 original_currency=t.original_currency.value if t.original_currency else "BRL",
                 installment_info=t.installment_info if t.is_installment else None,
                 account_name=account_name,
@@ -106,8 +106,8 @@ class ExpenseReportService:
             ids = [r.transaction_id for r in already_reported]
             raise HTTPException(status_code=400, detail=f"Transações já incluídas em outro relatório: {ids}")
 
-        # Calcular total
-        total_brl = sum(abs(t.amount_brl) for t in transactions)
+        # Calcular total (despesas negativas + reembolsos positivos = líquido)
+        total_brl = sum(t.amount_brl for t in transactions)
 
         # Criar relatório
         report = ExpenseReport(
@@ -150,8 +150,8 @@ class ExpenseReportService:
                 transaction_id=t.id,
                 date=t.date,
                 description=t.description,
-                amount_brl=abs(t.amount_brl),
-                original_amount=abs(t.original_amount),
+                amount_brl=t.amount_brl,
+                original_amount=t.original_amount,
                 original_currency=t.original_currency.value if t.original_currency else "BRL",
                 installment_info=t.installment_info if t.is_installment else None,
                 account_name=accounts.get(t.account_id),
@@ -265,7 +265,7 @@ class ExpenseReportService:
             items = self.db.query(ExpenseReportItem).filter(ExpenseReportItem.report_id == report_id).all()
             if items:
                 t_ids = [i.transaction_id for i in items]
-                total = self.db.query(func.sum(func.abs(Transaction.amount_brl))).filter(
+                total = self.db.query(func.sum(Transaction.amount_brl)).filter(
                     Transaction.id.in_(t_ids)
                 ).scalar()
                 report.total_brl = total or Decimal("0.00")
