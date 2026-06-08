@@ -37,6 +37,14 @@ frontend/
 - Todos os campos de valor são NOT NULL no banco
 - `original_currency` deve ser definido a partir da moeda da conta, não do default do schema
 
+### Contas de Investimento
+
+- Contas com `account_type='investment'`: Itau Carteira (id=12), XP Carteira (id=11), C6 Carteira (id=13)
+- **Saldo NÃO é calculado por soma de transações** — vem do `total_value` do último `InvestmentSnapshot`
+- Carga via `POST /api/v1/investments/upload` com PDF do extrato mensal (não via import de transações)
+- Parsers por banco: `ItauExtratoMensalParser`, XP, C6
+- Os endpoints `list_accounts` e `dashboard-summary` fazem override do `current_balance` com o snapshot mais recente
+
 ### Como rodar
 
 ```bash

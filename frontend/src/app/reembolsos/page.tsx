@@ -69,6 +69,12 @@ export default function ReembolsosPage() {
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [addIds, setAddIds] = useState<Set<number>>(new Set());
 
+  // Column filters
+  const [colFilters, setColFilters] = useState({ description: '', account: '', installment: '' });
+  const updateFilter = useCallback((key: keyof typeof colFilters, value: string) => {
+    setColFilters(prev => ({ ...prev, [key]: value }));
+  }, []);
+
   // Manual transaction form state
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualDate, setManualDate] = useState('');
@@ -116,7 +122,7 @@ export default function ReembolsosPage() {
   });
 
   const workExpenseCategoryId = useMemo(() => {
-    const cat = categories.find(c => c.name === 'Despesas Trabalho');
+    const cat = categories.find(c => c.name === 'Despesas Trabalho' || c.name === 'Reembolso Despesas');
     return cat?.id ?? null;
   }, [categories]);
 
@@ -190,12 +196,14 @@ export default function ReembolsosPage() {
     setReferenceMonth(getCurrentMonth());
     setSelectedIds(new Set());
     setNotes('');
+    setColFilters({ description: '', account: '', installment: '' });
     setView('new');
   }, []);
 
   const handleBack = useCallback(() => {
     setView('list');
     setSelectedReportId(null);
+    setColFilters({ description: '', account: '', installment: '' });
   }, []);
 
   const toggleTransaction = useCallback((id: number) => {
@@ -308,12 +316,25 @@ export default function ReembolsosPage() {
       });
   }, [reportDetail]);
 
+  // Filter helper
+  const matchesFilters = useCallback((item: { description: string; account_name: string | null; installment_info?: string | null }) => {
+    const { description, account, installment } = colFilters;
+    if (description && !item.description.toLowerCase().includes(description.toLowerCase())) return false;
+    if (account && !(item.account_name || '').toLowerCase().includes(account.toLowerCase())) return false;
+    if (installment && !(item.installment_info || '').toLowerCase().includes(installment.toLowerCase())) return false;
+    return true;
+  }, [colFilters]);
+
+  const filteredUnreported = useMemo(() => unreported.filter(matchesFilters), [unreported, matchesFilters]);
+
   // Computed
   const selectedTotal = useMemo(() => {
     return unreported
       .filter(t => selectedIds.has(t.id))
       .reduce((sum, t) => sum + t.amount_brl, 0);
   }, [unreported, selectedIds]);
+
+  const hasActiveFilters = colFilters.description || colFilters.account || colFilters.installment;
 
   // ===== RENDER =====
 
@@ -502,15 +523,22 @@ export default function ReembolsosPage() {
             {/* Transações não reportadas */}
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-slate-700">
-                Transações Disponíveis ({unreported.length})
+                Transações Disponíveis ({filteredUnreported.length}{hasActiveFilters ? `/${unreported.length}` : ''})
               </h3>
-              <Button variant="ghost" size="sm" onClick={toggleAll}>
-                {selectedIds.size === unreported.length ? (
-                  <><Square size={14} /> Limpar Seleção</>
-                ) : (
-                  <><CheckSquare size={14} /> Selecionar Todos</>
+              <div className="flex items-center gap-2">
+                {hasActiveFilters && (
+                  <Button variant="ghost" size="sm" onClick={() => setColFilters({ description: '', account: '', installment: '' })}>
+                    <X size={14} /> Limpar Filtros
+                  </Button>
                 )}
-              </Button>
+                <Button variant="ghost" size="sm" onClick={toggleAll}>
+                  {selectedIds.size === unreported.length ? (
+                    <><Square size={14} /> Limpar Seleção</>
+                  ) : (
+                    <><CheckSquare size={14} /> Selecionar Todos</>
+                  )}
+                </Button>
+              </div>
             </div>
 
             {loadingUnreported ? (
@@ -526,14 +554,44 @@ export default function ReembolsosPage() {
                     <tr className="bg-slate-50 border-b border-slate-200">
                       <th className="w-10 px-3 py-2"></th>
                       <th className="px-3 py-2 text-left font-medium text-slate-600">Data</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-600">Descrição</th>
-                      <th className="px-3 py-2 text-left font-medium text-slate-600">Conta</th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-600">
+                        Descrição
+                        <input
+                          type="text"
+                          value={colFilters.description}
+                          onChange={e => updateFilter('description', e.target.value)}
+                          placeholder="filtrar..."
+                          className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-slate-600">
+                        Conta
+                        <input
+                          type="text"
+                          value={colFilters.account}
+                          onChange={e => updateFilter('account', e.target.value)}
+                          placeholder="filtrar..."
+                          className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </th>
                       <th className="px-3 py-2 text-right font-medium text-slate-600">Valor (R$)</th>
-                      <th className="px-3 py-2 text-center font-medium text-slate-600">Parcela</th>
+                      <th className="px-3 py-2 text-center font-medium text-slate-600">
+                        Parcela
+                        <input
+                          type="text"
+                          value={colFilters.installment}
+                          onChange={e => updateFilter('installment', e.target.value)}
+                          placeholder="filtrar..."
+                          className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal text-center focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {unreported.map(t => (
+                    {filteredUnreported.map(t => (
                       <tr
                         key={t.id}
                         className={`border-b border-slate-100 cursor-pointer transition-colors ${
@@ -661,22 +719,56 @@ export default function ReembolsosPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {hasActiveFilters && (
+              <div className="flex items-center justify-end mb-2">
+                <Button variant="ghost" size="sm" onClick={() => setColFilters({ description: '', account: '', installment: '' })}>
+                  <X size={14} /> Limpar Filtros
+                </Button>
+              </div>
+            )}
             <div className="border border-slate-200 rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
                     {reportDetail.status === 'draft' && <th className="w-10 px-3 py-2"></th>}
                     <th className="px-3 py-2 text-left font-medium text-slate-600">Data</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Descrição</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-600">Conta</th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">
+                      Descrição
+                      <input
+                        type="text"
+                        value={colFilters.description}
+                        onChange={e => updateFilter('description', e.target.value)}
+                        placeholder="filtrar..."
+                        className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                    </th>
+                    <th className="px-3 py-2 text-left font-medium text-slate-600">
+                      Conta
+                      <input
+                        type="text"
+                        value={colFilters.account}
+                        onChange={e => updateFilter('account', e.target.value)}
+                        placeholder="filtrar..."
+                        className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                    </th>
                     <th className="px-3 py-2 text-right font-medium text-slate-600">Valor (R$)</th>
                     <th className="px-3 py-2 text-center font-medium text-slate-600">Moeda Orig.</th>
                     <th className="px-3 py-2 text-right font-medium text-slate-600">Valor Orig.</th>
-                    <th className="px-3 py-2 text-center font-medium text-slate-600">Parcela</th>
+                    <th className="px-3 py-2 text-center font-medium text-slate-600">
+                      Parcela
+                      <input
+                        type="text"
+                        value={colFilters.installment}
+                        onChange={e => updateFilter('installment', e.target.value)}
+                        placeholder="filtrar..."
+                        className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal text-center focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {reportDetail.items.map(item => (
+                  {reportDetail.items.filter(matchesFilters).map(item => (
                     <tr key={item.transaction_id} className="border-b border-slate-100 group">
                       {reportDetail.status === 'draft' && (
                         <td className="px-3 py-2 text-center">
@@ -825,14 +917,41 @@ export default function ReembolsosPage() {
                               <tr className="bg-slate-50 border-b border-slate-200">
                                 <th className="w-10 px-3 py-2"></th>
                                 <th className="px-3 py-2 text-left font-medium text-slate-600">Data</th>
-                                <th className="px-3 py-2 text-left font-medium text-slate-600">Descrição</th>
-                                <th className="px-3 py-2 text-left font-medium text-slate-600">Conta</th>
+                                <th className="px-3 py-2 text-left font-medium text-slate-600">
+                                  Descrição
+                                  <input
+                                    type="text"
+                                    value={colFilters.description}
+                                    onChange={e => updateFilter('description', e.target.value)}
+                                    placeholder="filtrar..."
+                                    className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                  />
+                                </th>
+                                <th className="px-3 py-2 text-left font-medium text-slate-600">
+                                  Conta
+                                  <input
+                                    type="text"
+                                    value={colFilters.account}
+                                    onChange={e => updateFilter('account', e.target.value)}
+                                    placeholder="filtrar..."
+                                    className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                  />
+                                </th>
                                 <th className="px-3 py-2 text-right font-medium text-slate-600">Valor (R$)</th>
-                                <th className="px-3 py-2 text-center font-medium text-slate-600">Parcela</th>
+                                <th className="px-3 py-2 text-center font-medium text-slate-600">
+                                  Parcela
+                                  <input
+                                    type="text"
+                                    value={colFilters.installment}
+                                    onChange={e => updateFilter('installment', e.target.value)}
+                                    placeholder="filtrar..."
+                                    className="mt-1 block w-full px-2 py-0.5 border border-slate-200 rounded text-xs font-normal text-center focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                  />
+                                </th>
                               </tr>
                             </thead>
                             <tbody>
-                              {unreported.map(t => (
+                              {filteredUnreported.map(t => (
                                 <tr
                                   key={t.id}
                                   className={`border-b border-slate-100 cursor-pointer transition-colors ${

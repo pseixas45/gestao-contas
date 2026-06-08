@@ -41,7 +41,7 @@ export default function OrcamentoPage() {
   const queryClient = useQueryClient();
   const now = new Date();
   const currentYear = now.getFullYear();
-  const currentMonth = `${currentYear}-01`;
+  const currentMonth = `${currentYear}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const endMonth = `${currentYear}-12`;
 
   const [startMonth, setStartMonth] = useState(currentMonth);

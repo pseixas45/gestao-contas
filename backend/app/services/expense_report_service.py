@@ -29,21 +29,23 @@ from app.schemas.expense_report import (
 )
 
 
-WORK_EXPENSE_CATEGORY_NAME = "Despesas Trabalho"
+EXPENSE_REPORT_CATEGORY_NAMES = ["Despesas Trabalho", "Reembolso Despesas"]
 
 
 class ExpenseReportService:
     def __init__(self, db: Session):
         self.db = db
 
-    def _get_work_expense_category_id(self) -> int:
-        cat = self.db.query(Category).filter(Category.name == WORK_EXPENSE_CATEGORY_NAME).first()
-        if not cat:
-            raise HTTPException(status_code=404, detail=f"Categoria '{WORK_EXPENSE_CATEGORY_NAME}' não encontrada")
-        return cat.id
+    def _get_expense_report_category_ids(self) -> List[int]:
+        cats = self.db.query(Category).filter(
+            Category.name.in_(EXPENSE_REPORT_CATEGORY_NAMES)
+        ).all()
+        if not cats:
+            raise HTTPException(status_code=404, detail=f"Nenhuma categoria encontrada: {EXPENSE_REPORT_CATEGORY_NAMES}")
+        return [c.id for c in cats]
 
     def get_unreported_transactions(self) -> List[UnreportedTransaction]:
-        category_id = self._get_work_expense_category_id()
+        category_ids = self._get_expense_report_category_ids()
 
         reported_ids = self.db.query(ExpenseReportItem.transaction_id).subquery()
 
@@ -51,7 +53,7 @@ class ExpenseReportService:
             self.db.query(Transaction, BankAccount.name.label("account_name"))
             .join(BankAccount, Transaction.account_id == BankAccount.id)
             .filter(
-                Transaction.category_id == category_id,
+                Transaction.category_id.in_(category_ids),
                 ~Transaction.id.in_(self.db.query(reported_ids.c.transaction_id)),
             )
             .order_by(Transaction.date.desc())
@@ -73,9 +75,9 @@ class ExpenseReportService:
         return result
 
     def create_report(self, data: ExpenseReportCreate) -> ExpenseReportDetail:
-        category_id = self._get_work_expense_category_id()
+        category_ids = self._get_expense_report_category_ids()
 
-        # Validar que transações existem e pertencem à categoria
+        # Validar que transações existem e pertencem às categorias
         transactions = (
             self.db.query(Transaction)
             .filter(Transaction.id.in_(data.transaction_ids))
@@ -87,11 +89,11 @@ class ExpenseReportService:
             missing = set(data.transaction_ids) - found_ids
             raise HTTPException(status_code=400, detail=f"Transações não encontradas: {missing}")
 
-        wrong_category = [t.id for t in transactions if t.category_id != category_id]
+        wrong_category = [t.id for t in transactions if t.category_id not in category_ids]
         if wrong_category:
             raise HTTPException(
                 status_code=400,
-                detail=f"Transações não pertencem à categoria '{WORK_EXPENSE_CATEGORY_NAME}': {wrong_category}",
+                detail=f"Transações não pertencem às categorias de reembolso: {wrong_category}",
             )
 
         # Verificar se alguma já está em outro relatório
@@ -231,16 +233,16 @@ class ExpenseReportService:
             ).delete(synchronize_session=False)
 
         if data.add_transaction_ids:
-            category_id = self._get_work_expense_category_id()
+            category_ids = self._get_expense_report_category_ids()
             # Validar transações
             transactions = (
                 self.db.query(Transaction)
                 .filter(Transaction.id.in_(data.add_transaction_ids))
                 .all()
             )
-            wrong_category = [t.id for t in transactions if t.category_id != category_id]
+            wrong_category = [t.id for t in transactions if t.category_id not in category_ids]
             if wrong_category:
-                raise HTTPException(status_code=400, detail=f"Transações fora da categoria: {wrong_category}")
+                raise HTTPException(status_code=400, detail=f"Transações fora das categorias de reembolso: {wrong_category}")
 
             already_reported = (
                 self.db.query(ExpenseReportItem.transaction_id)

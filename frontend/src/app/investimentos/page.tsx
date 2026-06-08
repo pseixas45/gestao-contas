@@ -160,6 +160,7 @@ export default function InvestimentosDashboardPage() {
             <Link href="/investimentos/historico" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Histórico</Link>
             <Link href="/investimentos/metas" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Metas</Link>
             <Link href="/investimentos/ativos" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Ativos</Link>
+            <Link href="/investimentos/evolucao" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Evolucao</Link>
             <Link href="/investimentos/importar" className="text-xs px-3 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium">Importar</Link>
           </div>
         </div>

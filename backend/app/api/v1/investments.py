@@ -871,6 +871,156 @@ def monthly_yield_endpoint(
     return results
 
 
+@router.get("/position-evolution")
+def position_evolution(
+    account_id: Optional[int] = None,
+    asset_class_id: Optional[int] = None,
+    asset_id: Optional[int] = None,
+    date_from: Optional[str] = None,  # YYYY-MM
+    date_to: Optional[str] = None,    # YYYY-MM
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Evolução de posições: ativos nas linhas × meses nas colunas."""
+    from collections import defaultdict
+    import calendar
+
+    # Filtrar contas de investimento
+    accs_q = db.query(BankAccount).filter(
+        BankAccount.is_active == True,
+        BankAccount.account_type == "INVESTMENT",
+    )
+    if account_id:
+        accs_q = accs_q.filter(BankAccount.id == account_id)
+    accounts = accs_q.all()
+    account_ids = {a.id for a in accounts}
+    accounts_map = {a.id: a.name for a in accounts}
+
+    if not account_ids:
+        return {"months": [], "assets": [], "accounts": []}
+
+    # Buscar todos os snapshots
+    snaps_q = db.query(InvestmentSnapshot).filter(
+        InvestmentSnapshot.account_id.in_(account_ids),
+    )
+    snapshots = snaps_q.all()
+    snap_ids = {s.id for s in snapshots}
+
+    if not snap_ids:
+        return {"months": [], "assets": [], "accounts": []}
+
+    # Buscar posições com joins
+    from sqlalchemy.orm import selectinload
+    positions = (
+        db.query(InvestmentPosition)
+        .options(selectinload(InvestmentPosition.asset).selectinload(Asset.asset_class))
+        .filter(InvestmentPosition.snapshot_id.in_(snap_ids))
+        .all()
+    )
+
+    # Mapear snapshot_id -> snapshot
+    snap_map = {s.id: s for s in snapshots}
+
+    # Filtro de período
+    date_from_parsed = None
+    date_to_parsed = None
+    if date_from:
+        parts = date_from.split("-")
+        date_from_parsed = date(int(parts[0]), int(parts[1]), 1)
+    if date_to:
+        parts = date_to.split("-")
+        last_day = calendar.monthrange(int(parts[0]), int(parts[1]))[1]
+        date_to_parsed = date(int(parts[0]), int(parts[1]), last_day)
+
+    # Organizar dados: asset_key -> {month -> value}
+    # asset_key = (asset_id, account_id) para distinguir mesmo ativo em contas diferentes
+    data: dict = defaultdict(lambda: defaultdict(lambda: None))
+    asset_info: dict = {}  # asset_key -> {name, class, account, ...}
+    months_set: set = set()
+
+    for pos in positions:
+        snap = snap_map.get(pos.snapshot_id)
+        if not snap:
+            continue
+
+        sd = snap.snapshot_date
+
+        # Filtro de período
+        if date_from_parsed and sd < date_from_parsed:
+            continue
+        if date_to_parsed and sd > date_to_parsed:
+            continue
+
+        asset = pos.asset
+        if not asset:
+            continue
+
+        # Filtro de classe
+        if asset_class_id and asset.asset_class_id != asset_class_id:
+            continue
+
+        # Filtro de ativo
+        if asset_id and asset.id != asset_id:
+            continue
+
+        month_key = sd.strftime("%Y-%m")
+        months_set.add(month_key)
+
+        a_key = f"{asset.id}_{snap.account_id}"
+
+        if a_key not in asset_info:
+            asset_info[a_key] = {
+                "key": a_key,
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "asset_class": asset.asset_class.name if asset.asset_class else None,
+                "asset_class_id": asset.asset_class_id,
+                "asset_class_color": asset.asset_class.color if asset.asset_class else None,
+                "account_id": snap.account_id,
+                "account_name": accounts_map.get(snap.account_id, ""),
+            }
+
+        # Se já existe valor para esse mês (duplicata), somar
+        existing = data[a_key][month_key]
+        val = float(pos.value or 0)
+        if existing is not None:
+            data[a_key][month_key] = existing + val
+        else:
+            data[a_key][month_key] = val
+
+    # Ordenar meses
+    sorted_months = sorted(months_set)
+
+    # Montar resultado
+    assets_result = []
+    for a_key, info in sorted(asset_info.items(), key=lambda x: x[1]["asset_name"]):
+        values = {}
+        for m in sorted_months:
+            v = data[a_key].get(m)
+            values[m] = round(v, 2) if v is not None else None
+        assets_result.append({
+            **info,
+            "values": values,
+        })
+
+    # Lista de contas e classes para filtros
+    class_set = {}
+    for info in asset_info.values():
+        if info["asset_class_id"] and info["asset_class_id"] not in class_set:
+            class_set[info["asset_class_id"]] = {
+                "id": info["asset_class_id"],
+                "name": info["asset_class"],
+                "color": info["asset_class_color"],
+            }
+
+    return {
+        "months": sorted_months,
+        "assets": assets_result,
+        "accounts": [{"id": a.id, "name": a.name} for a in accounts],
+        "asset_classes": list(class_set.values()),
+    }
+
+
 @router.post("/market-data/update")
 async def update_market_data(
     db: Session = Depends(get_db),

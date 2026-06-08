@@ -24,6 +24,7 @@ class AccountUpdate(BaseModel):
     account_number: Optional[str] = None
     account_type: Optional[AccountType] = None
     currency: Optional[CurrencyCode] = None
+    initial_balance: Optional[Decimal] = None
     is_active: Optional[bool] = None
 
 

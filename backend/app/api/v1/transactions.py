@@ -137,9 +137,13 @@ def list_transactions(
         query = query.filter(Transaction.is_validated == is_validated)
 
     # Ordenar e paginar
+    from sqlalchemy.orm import joinedload
     total = query.count()
     offset = (page - 1) * limit
-    transactions = query.order_by(Transaction.date.desc(), Transaction.id.desc())\
+    transactions = query.options(
+        joinedload(Transaction.account),
+        joinedload(Transaction.category)
+    ).order_by(Transaction.date.desc(), Transaction.id.desc())\
         .offset(offset).limit(limit).all()
 
     # Adicionar dados relacionados

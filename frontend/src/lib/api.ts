@@ -890,6 +890,25 @@ export interface InvestmentDashboard {
   contributions: ContributionPoint[];
 }
 
+export interface PositionEvolutionAsset {
+  key: string;
+  asset_id: number;
+  asset_name: string;
+  asset_class: string | null;
+  asset_class_id: number | null;
+  asset_class_color: string | null;
+  account_id: number;
+  account_name: string;
+  values: Record<string, number | null>;  // month -> value
+}
+
+export interface PositionEvolutionData {
+  months: string[];
+  assets: PositionEvolutionAsset[];
+  accounts: Array<{ id: number; name: string }>;
+  asset_classes: Array<{ id: number; name: string; color: string | null }>;
+}
+
 export const investmentsApi = {
   // Asset classes
   listAssetClasses: async (): Promise<AssetClass[]> => {
@@ -1038,6 +1057,17 @@ export const investmentsApi = {
 
   updateMarketData: async (): Promise<{ message: string; total_fetched: number }> => {
     const response = await api.post('/investments/market-data/update');
+    return response.data;
+  },
+
+  positionEvolution: async (params?: {
+    account_id?: number;
+    asset_class_id?: number;
+    asset_id?: number;
+    date_from?: string;
+    date_to?: string;
+  }): Promise<PositionEvolutionData> => {
+    const response = await api.get('/investments/position-evolution', { params });
     return response.data;
   },
 };

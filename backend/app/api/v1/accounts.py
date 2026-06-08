@@ -7,6 +7,7 @@ from sqlalchemy import func
 from app.api.deps import get_db
 from app.models import BankAccount, Bank, Transaction, User, AccountBalanceLog
 from app.models.exchange_rate import CurrencyCode, ExchangeRate
+from app.models.investment import InvestmentSnapshot
 from app.schemas.account import AccountCreate, AccountUpdate, AccountResponse, AccountBalance
 from app.utils.security import get_current_active_user
 from app.services.balance_log_service import log_balance_change
@@ -44,7 +45,8 @@ def list_accounts(
     if active_only:
         query = query.filter(BankAccount.is_active == True)
 
-    accounts = query.order_by(BankAccount.name).all()
+    from sqlalchemy.orm import joinedload
+    accounts = query.options(joinedload(BankAccount.bank)).order_by(BankAccount.name).all()
 
     # Buscar cotações mais recentes (uma vez, fora do loop)
     latest_rates = {
@@ -52,18 +54,35 @@ def list_accounts(
         CurrencyCode.EUR: _get_latest_rate(db, CurrencyCode.EUR),
     }
 
+    # Para contas de investimento, buscar total_value do último snapshot
+    investment_balances = {}
+    inv_accounts = [a for a in accounts if a.account_type == 'investment']
+    for inv_acc in inv_accounts:
+        latest_snap = db.query(InvestmentSnapshot).filter(
+            InvestmentSnapshot.account_id == inv_acc.id
+        ).order_by(InvestmentSnapshot.snapshot_date.desc()).first()
+        if latest_snap and latest_snap.total_value:
+            investment_balances[inv_acc.id] = latest_snap.total_value
+
     # Adicionar nome do banco e saldo em BRL
     result = []
     for account in accounts:
         account_dict = AccountResponse.model_validate(account).model_dump()
         account_dict["bank_name"] = account.bank.name if account.bank else None
 
+        # Contas de investimento: saldo = total_value do último snapshot
+        if account.account_type == 'investment' and account.id in investment_balances:
+            effective_balance = investment_balances[account.id]
+            account_dict["current_balance"] = float(effective_balance)
+        else:
+            effective_balance = account.current_balance
+
         # Calcular saldo equivalente em BRL usando cotação mais recente
         if account.currency == CurrencyCode.BRL:
-            account_dict["balance_brl"] = float(account.current_balance)
+            account_dict["balance_brl"] = float(effective_balance)
         else:
             rate = latest_rates.get(account.currency, Decimal("1.00"))
-            account_dict["balance_brl"] = round(float(account.current_balance * rate), 2)
+            account_dict["balance_brl"] = round(float(effective_balance * rate), 2)
 
         result.append(AccountResponse(**account_dict))
 

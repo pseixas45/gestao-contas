@@ -18,6 +18,7 @@ from app.models.transaction import Transaction
 from app.models.account import BankAccount
 from app.models.bank import Bank
 from app.models.category import Category
+from app.models.investment import InvestmentSnapshot
 from app.schemas.report import (
     MonthlyExpenseReport,
     ExpenseTrendReport,
@@ -255,10 +256,27 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
         else:
             latest_rates[cur] = Decimal("1")
 
+    # Para contas de investimento, buscar total_value do último snapshot
+    investment_balances = {}
+    investment_accounts = [a for a in accounts if a.account_type == 'investment']
+    if investment_accounts:
+        inv_ids = [a.id for a in investment_accounts]
+        from sqlalchemy import distinct
+        for acc_id in inv_ids:
+            latest_snap = db.query(InvestmentSnapshot).filter(
+                InvestmentSnapshot.account_id == acc_id
+            ).order_by(InvestmentSnapshot.snapshot_date.desc()).first()
+            if latest_snap and latest_snap.total_value:
+                investment_balances[acc_id] = latest_snap.total_value
+
     account_balances = []
     total_brl = Decimal("0")
     for acc in accounts:
-        balance = acc.current_balance or Decimal("0")
+        # Contas de investimento: saldo = total_value do último snapshot
+        if acc.account_type == 'investment' and acc.id in investment_balances:
+            balance = investment_balances[acc.id]
+        else:
+            balance = acc.current_balance or Decimal("0")
         cur = acc.currency or "BRL"
         if cur == "BRL":
             bal_brl = balance
