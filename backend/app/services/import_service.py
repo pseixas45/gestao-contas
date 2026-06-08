@@ -353,9 +353,12 @@ def get_installment_base_description(description: str) -> str:
     Remove o sufixo de parcela da descrição.
     Ex: "PG *POSITIVO TECN 6 de 10" -> "PG *POSITIVO TECN"
         "AG DE TURISMO 5/10" -> "AG DE TURISMO"
+        "LOCALIZA RAC ACJKK1 - Parcela 2/3" -> "LOCALIZA RAC ACJKK1"
     """
     # Remove padrões como "7 de 10", "7/10", "07/10"
     cleaned = re.sub(r'\s*\d{1,2}\s*(?:de|/)\s*\d{1,2}\s*$', '', description).strip()
+    # Remove "- Parcela" ou "Parcela" no final (C6 Master PDF format)
+    cleaned = re.sub(r'\s*-?\s*[Pp]arcela\s*$', '', cleaned).strip()
     # Remove traço final se houver (ex: "DRASTOSA -")
     cleaned = re.sub(r'\s*-\s*$', '', cleaned).strip()
     return cleaned
