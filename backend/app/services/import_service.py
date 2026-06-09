@@ -1198,10 +1198,15 @@ class ImportService:
             for j in range(ws.ncols)
         ]
 
-        # Converter para dicionários
+        # Converter para dicionários, filtrando lançamentos futuros (Itaú)
         result = []
         for i in range(1, ws.nrows):
             row_vals = [ws.cell_value(i, j) for j in range(ws.ncols)]
+            # Detectar marcador "lançamentos futuros" / "saídas futuras" (Itaú)
+            first_cell = str(row_vals[0]).strip().lower() if row_vals[0] else ''
+            if 'futuros' in first_cell or 'futuras' in first_cell:
+                logger.info(f"Itaú XLS: lançamentos futuros detectados na linha {i}, truncando")
+                break
             if any(v is not None and v != '' for v in row_vals):
                 row_dict = {
                     headers[j]: row_vals[j] if row_vals[j] != '' else None

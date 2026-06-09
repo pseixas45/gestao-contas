@@ -1171,4 +1171,30 @@ export const expenseReportsApi = {
   },
 };
 
+// ==================== Import Agent ====================
+
+export interface AgentClassification {
+  filename: string;
+  file_type: 'transaction' | 'investment';
+  detected_account_id: number | null;
+  detected_account_name: string | null;
+  detected_bank: string | null;
+  confidence: 'high' | 'medium' | 'low';
+  needs_card_payment_date: boolean;
+  warnings: string[];
+  error: string | null;
+}
+
+export const importAgentApi = {
+  classify: async (file: File): Promise<AgentClassification> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('filename', file.name);
+    const response = await api.post('/imports/agent/classify', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+};
+
 export default api;

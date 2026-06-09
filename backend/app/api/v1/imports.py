@@ -1221,3 +1221,93 @@ async def bulk_process(
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=error_msg)
+
+
+# ============================================================
+# Import Agent: classificação automática de arquivos
+# ============================================================
+
+import re as _re
+
+AGENT_FILENAME_RULES = [
+    # Ordem importa: regras mais específicas primeiro (ex: "C6 Master" antes de "Master")
+    (_re.compile(r"C6 Master", _re.IGNORECASE), 2, "transaction", "C6M"),
+    (_re.compile(r"C6 Extrato", _re.IGNORECASE), 3, "transaction", "C6R$"),
+    (_re.compile(r"c6 investimentos", _re.IGNORECASE), 13, "investment", "C6 Carteira"),
+    (_re.compile(r"XP Visa", _re.IGNORECASE), 10, "transaction", "XPVisa"),
+    (_re.compile(r"XP.*historico|XP.*posicao|PosicaoDetalhada", _re.IGNORECASE), 11, "investment", "XP Carteira"),
+    (_re.compile(r"Itaú.Extrato Mensal|Itau.Extrato Mensal", _re.IGNORECASE), 12, "investment", "Itau Carteira"),
+    (_re.compile(r"Itau \d{6}\.xls", _re.IGNORECASE), 5, "transaction", "Itaú"),
+    (_re.compile(r"Master \d{6}", _re.IGNORECASE), 6, "transaction", "Master"),
+    (_re.compile(r"Visa fatura-", _re.IGNORECASE), 8, "transaction", "Visa"),
+]
+
+
+@router.post("/agent/classify")
+def agent_classify_file(
+    file: UploadFile = File(...),
+    filename: str = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Classifica um arquivo para o Import Agent sem salvá-lo."""
+    fname = filename or file.filename or ""
+
+    detected_account_id = None
+    detected_account_name = None
+    detected_bank = None
+    file_type = None
+    confidence = "low"
+    warnings = []
+
+    for pattern, account_id, ftype, display_name in AGENT_FILENAME_RULES:
+        if pattern.search(fname):
+            detected_account_id = account_id
+            file_type = ftype
+            detected_bank = display_name
+            confidence = "high"
+            break
+
+    # Buscar nome da conta no DB
+    if detected_account_id:
+        account = db.query(BankAccount).filter(BankAccount.id == detected_account_id).first()
+        if account:
+            detected_account_name = account.name
+
+    # Determinar se precisa de card_payment_date
+    needs_card_payment_date = False
+    if detected_account_id and file_type == "transaction":
+        account = db.query(BankAccount).filter(BankAccount.id == detected_account_id).first()
+        if account and account.account_type == "credit_card":
+            needs_card_payment_date = True
+
+    # Warnings específicos por banco
+    if detected_bank == "Itaú" and fname.endswith(".xls"):
+        warnings.append("Arquivo Itaú XLS pode conter lançamentos futuros (serão filtrados automaticamente)")
+    if detected_bank in ("C6R$", "C6M") and fname.endswith(".pdf"):
+        warnings.append("PDF C6 com senha — será desbloqueado automaticamente")
+    if detected_bank == "XPVisa":
+        warnings.append("Coluna Parcela será ignorada (contém data final, não mês da fatura)")
+
+    # Se não classificou pelo nome, tenta pelo content-type/extensão
+    if not file_type:
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        if ext in ("csv", "xlsx", "xls"):
+            file_type = "transaction"
+            confidence = "low"
+        elif ext == "pdf":
+            file_type = "investment"
+            confidence = "low"
+            warnings.append("Tipo detectado por extensão — confirme a conta manualmente")
+
+    return {
+        "filename": fname,
+        "file_type": file_type or "transaction",
+        "detected_account_id": detected_account_id,
+        "detected_account_name": detected_account_name,
+        "detected_bank": detected_bank,
+        "confidence": confidence,
+        "needs_card_payment_date": needs_card_payment_date,
+        "warnings": warnings,
+        "error": None,
+    }

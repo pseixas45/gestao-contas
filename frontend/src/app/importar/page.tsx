@@ -180,7 +180,17 @@ export default function ImportarPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Importar Extrato</h1>
-            <p className="text-slate-500">Carregue extratos bancarios em CSV ou Excel</p>
+            <div className="flex gap-1 mt-2">
+              <span className="px-3 py-1.5 text-sm font-medium text-primary-700 bg-primary-50 rounded-lg">
+                Manual
+              </span>
+              <a
+                href="/importar/agente"
+                className="px-3 py-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100"
+              >
+                Agente
+              </a>
+            </div>
           </div>
           {step !== 'upload' && (
             <Button variant="secondary" size="sm" onClick={resetImport}>
