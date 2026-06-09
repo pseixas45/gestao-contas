@@ -14,8 +14,9 @@ import {
 import { formatCurrency } from '@/lib/utils';
 import {
   importAgentApi, importsApi, investmentsApi, accountsApi,
-  type AgentClassification, type ImportResult,
+  type AgentClassification,
 } from '@/lib/api';
+import type { ImportResult } from '@/types';
 
 // ============ Types ============
 
@@ -279,12 +280,12 @@ export default function ImportAgentPage() {
 
           // Step 2: Analyze
           dispatch({ type: 'UPDATE_PROC_STATUS', id: af.id, status: 'analyzing' });
-          const analysis = await importsApi.analyze(
-            preview.batch_id,
-            preview.detected_mapping,
-            accountId,
-            af.cardPaymentDate || undefined,
-          );
+          const analysis = await importsApi.analyze({
+            batch_id: preview.batch_id,
+            column_mapping: preview.detected_mapping,
+            account_id: accountId,
+            card_payment_date: af.cardPaymentDate || undefined,
+          });
 
           // Skip if all duplicates
           if (analysis.new_count === 0) {
@@ -294,15 +295,14 @@ export default function ImportAgentPage() {
 
           // Step 3: Process
           dispatch({ type: 'UPDATE_PROC_STATUS', id: af.id, status: 'processing' });
-          const result = await importsApi.process(
-            preview.batch_id,
-            preview.detected_mapping,
-            accountId,
-            false, // validate_balance
-            undefined, // expected_final_balance
-            true, // skip_duplicates
-            af.cardPaymentDate || undefined,
-          );
+          const result = await importsApi.process({
+            batch_id: preview.batch_id,
+            column_mapping: preview.detected_mapping,
+            account_id: accountId,
+            validate_balance: false,
+            skip_duplicates: true,
+            card_payment_date: af.cardPaymentDate || undefined,
+          });
           dispatch({ type: 'SET_IMPORT_RESULT', id: af.id, result });
         }
       } catch (e: unknown) {
