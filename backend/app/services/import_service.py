@@ -18,6 +18,7 @@ Inclui:
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import logging
 import tempfile
 import os
 import hashlib
@@ -38,6 +39,8 @@ from app.schemas.import_file import (
 from app.services.categorization_service import CategorizationService
 from app.services.exchange_service import ExchangeService
 from app.services.balance_log_service import log_balance_change
+
+logger = logging.getLogger(__name__)
 
 
 class ColumnDetector:
