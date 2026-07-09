@@ -1185,6 +1185,31 @@ class ImportService:
         wb.close()
         return result
 
+    # Palavras-chave que identificam a linha de cabeçalho de um extrato.
+    # Alguns bancos (Itaú) exportam .xls com logo/metadados antes do cabeçalho.
+    _HEADER_KEYWORDS = (
+        'data', 'date', 'lancamento', 'lançamento', 'historico', 'histórico',
+        'descricao', 'descrição', 'valor', 'saldo', 'credito', 'crédito',
+        'debito', 'débito', 'entrada', 'saida', 'saída', 'titulo', 'título',
+    )
+
+    @classmethod
+    def _find_header_row(cls, rows: List[List[Any]], scan_limit: int = 30) -> int:
+        """Encontra o índice da linha de cabeçalho: a que mais bate keywords de extrato.
+
+        Retorna 0 (comportamento antigo) se nenhuma linha tiver >= 2 colunas reconhecíveis.
+        """
+        best_row, best_score = 0, 0
+        for i in range(min(len(rows), scan_limit)):
+            score = 0
+            for cell in rows[i]:
+                norm = str(cell).strip().lower() if cell is not None else ''
+                if norm and any(kw in norm for kw in cls._HEADER_KEYWORDS):
+                    score += 1
+            if score > best_score:
+                best_score, best_row = score, i
+        return best_row if best_score >= 2 else 0
+
     def _parse_xls(self, file_path: str) -> List[Dict[str, Any]]:
         """Parse arquivo Excel .xls (formato antigo)."""
         import xlrd
@@ -1195,15 +1220,18 @@ class ImportService:
         if ws.nrows == 0:
             return []
 
-        # Primeira linha como cabeçalho
+        # Detectar a linha de cabeçalho real (Itaú tem logo/metadados no topo)
+        all_rows = [[ws.cell_value(i, j) for j in range(ws.ncols)] for i in range(ws.nrows)]
+        header_row = self._find_header_row(all_rows)
+
         headers = [
-            str(ws.cell_value(0, j)).strip() if ws.cell_value(0, j) else f'col_{j}'
+            str(ws.cell_value(header_row, j)).strip() if ws.cell_value(header_row, j) else f'col_{j}'
             for j in range(ws.ncols)
         ]
 
         # Converter para dicionários, filtrando lançamentos futuros (Itaú)
         result = []
-        for i in range(1, ws.nrows):
+        for i in range(header_row + 1, ws.nrows):
             row_vals = [ws.cell_value(i, j) for j in range(ws.ncols)]
             # Detectar marcador "lançamentos futuros" / "saídas futuras" (Itaú)
             first_cell = str(row_vals[0]).strip().lower() if row_vals[0] else ''

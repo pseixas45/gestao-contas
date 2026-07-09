@@ -180,6 +180,7 @@ async def analyze_import(
     transactions_preview = []  # All transactions for review
     running_balance = Decimal("0")  # Saldo acumulado para validação linha a linha
     first_balance_divergence_row = None  # Primeira linha onde saldo diverge
+    last_file_balance = None  # Último saldo lido da coluna de saldo do extrato (saldo final)
 
     for idx, row in enumerate(raw_data):
         try:
@@ -240,6 +241,7 @@ async def analyze_import(
                 if bal_str:
                     file_balance_val = service._parse_amount(bal_str)
                     if file_balance_val is not None:
+                        last_file_balance = file_balance_val
                         # Comparar com tolerância de 0.01
                         diff = abs(running_balance - file_balance_val)
                         balance_ok_val = diff < Decimal("0.02")
@@ -445,6 +447,18 @@ async def analyze_import(
     positive_total = sum(positive_amounts, Decimal("0.00"))
     negative_total = sum(negative_amounts, Decimal("0.00"))
 
+    # Validação de saldo projetado: saldo_atual + novas transações deve bater
+    # com o saldo final do extrato. Só é possível se o extrato tem coluna de saldo.
+    statement_final_balance = last_file_balance
+    account_current_balance = account.current_balance
+    projected_balance = None
+    balance_projected_difference = None
+    balance_will_match = None
+    if statement_final_balance is not None:
+        projected_balance = account_current_balance + calculated_total
+        balance_projected_difference = statement_final_balance - projected_balance
+        balance_will_match = abs(balance_projected_difference) < Decimal("0.01")
+
     return ImportAnalysis(
         batch_id=data.batch_id,
         total_rows=len(raw_data),
@@ -464,6 +478,11 @@ async def analyze_import(
         negative_count=len(negative_amounts),
         running_balance_final=running_balance,
         first_balance_divergence_row=first_balance_divergence_row,
+        statement_final_balance=statement_final_balance,
+        account_current_balance=account_current_balance,
+        projected_balance=projected_balance,
+        balance_projected_difference=balance_projected_difference,
+        balance_will_match=balance_will_match,
         transactions_preview=transactions_preview,
     )
 

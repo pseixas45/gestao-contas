@@ -16,7 +16,7 @@ import {
   importAgentApi, importsApi, investmentsApi, accountsApi,
   type AgentClassification,
 } from '@/lib/api';
-import type { ImportResult } from '@/types';
+import type { ImportResult, ImportAnalysis } from '@/types';
 
 // ============ Types ============
 
@@ -32,9 +32,10 @@ interface AgentFile {
   cardPaymentDate: string;
   skipped: boolean;
   // Processing
-  procStatus: 'waiting' | 'uploading' | 'analyzing' | 'processing' | 'done' | 'skipped' | 'error';
+  procStatus: 'waiting' | 'uploading' | 'analyzing' | 'processing' | 'done' | 'skipped' | 'error' | 'balance_blocked';
   importResult: ImportResult | null;
   investmentResult: { snapshot_date: string; total_value: number; positions_count: number } | null;
+  analysis: ImportAnalysis | null;
   procError: string | null;
 }
 
@@ -56,6 +57,8 @@ type Action =
   | { type: 'UPDATE_PROC_STATUS'; id: string; status: AgentFile['procStatus'] }
   | { type: 'SET_IMPORT_RESULT'; id: string; result: ImportResult }
   | { type: 'SET_INVESTMENT_RESULT'; id: string; result: AgentFile['investmentResult'] }
+  | { type: 'SET_ANALYSIS'; id: string; analysis: ImportAnalysis }
+  | { type: 'SET_BALANCE_BLOCKED'; id: string; analysis: ImportAnalysis }
   | { type: 'SET_PROC_ERROR'; id: string; error: string }
   | { type: 'FINISH_PROCESSING' }
   | { type: 'RESET' };
@@ -126,6 +129,20 @@ function reducer(state: AgentState, action: Action): AgentState {
           f.id === action.id ? { ...f, procStatus: 'done', investmentResult: action.result } : f
         ),
       };
+    case 'SET_ANALYSIS':
+      return {
+        ...state,
+        files: state.files.map(f =>
+          f.id === action.id ? { ...f, analysis: action.analysis } : f
+        ),
+      };
+    case 'SET_BALANCE_BLOCKED':
+      return {
+        ...state,
+        files: state.files.map(f =>
+          f.id === action.id ? { ...f, procStatus: 'balance_blocked', analysis: action.analysis } : f
+        ),
+      };
     case 'SET_PROC_ERROR':
       return {
         ...state,
@@ -152,6 +169,14 @@ function getFileType(f: AgentFile): string {
   return f.classification?.file_type ?? 'transaction';
 }
 
+function balanceDivergenceMsg(a: ImportAnalysis | null): string | null {
+  if (!a || a.balance_will_match !== false) return null;
+  const stmt = a.statement_final_balance ?? 0;
+  const proj = a.projected_balance ?? 0;
+  const diff = a.balance_projected_difference ?? 0;
+  return `Saldo do extrato ${formatCurrency(stmt)} ≠ projetado ${formatCurrency(proj)} (diferença ${formatCurrency(diff)}). Possivel lancamento faltante ou duplicado — revisar no import manual.`;
+}
+
 let idCounter = 0;
 function genId() { return `agent-file-${++idCounter}-${Date.now()}`; }
 
@@ -163,6 +188,7 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
   done: <CheckCircle size={18} className="text-emerald-500" />,
   skipped: <div className="w-5 h-5 rounded-full bg-slate-200" />,
   error: <XCircle size={18} className="text-rose-500" />,
+  balance_blocked: <AlertTriangle size={18} className="text-amber-500" />,
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -173,6 +199,7 @@ const STATUS_LABELS: Record<string, string> = {
   done: 'Concluido',
   skipped: 'Pulado',
   error: 'Erro',
+  balance_blocked: 'Saldo divergente — nao gravado',
 };
 
 // ============ Component ============
@@ -202,6 +229,7 @@ export default function ImportAgentPage() {
       procStatus: 'waiting' as const,
       importResult: null,
       investmentResult: null,
+      analysis: null,
       procError: null,
     }));
 
@@ -287,9 +315,19 @@ export default function ImportAgentPage() {
             card_payment_date: af.cardPaymentDate || undefined,
           });
 
+          dispatch({ type: 'SET_ANALYSIS', id: af.id, analysis });
+
           // Skip if all duplicates
           if (analysis.new_count === 0) {
             dispatch({ type: 'UPDATE_PROC_STATUS', id: af.id, status: 'skipped' });
+            continue;
+          }
+
+          // Validação de saldo: bloquear gravação se o saldo projetado não bater
+          // com o saldo final do extrato. balance_will_match === null significa que
+          // o extrato não tem coluna de saldo (ex: cartão) — não há como validar.
+          if (analysis.balance_will_match === false) {
+            dispatch({ type: 'SET_BALANCE_BLOCKED', id: af.id, analysis });
             continue;
           }
 
@@ -332,7 +370,7 @@ export default function ImportAgentPage() {
       total: state.files.length,
       processed: done.length,
       skipped: state.files.filter(f => f.procStatus === 'skipped').length,
-      errors: state.files.filter(f => f.procStatus === 'error').length,
+      errors: state.files.filter(f => f.procStatus === 'error' || f.procStatus === 'balance_blocked').length,
       imported: done.reduce((s, f) => s + (f.importResult?.imported_count ?? f.investmentResult?.positions_count ?? 0), 0),
       duplicates: done.reduce((s, f) => s + (f.importResult?.duplicate_count ?? 0), 0),
     };
@@ -537,7 +575,9 @@ export default function ImportAgentPage() {
                       <p className="text-xs text-slate-500">
                         {STATUS_LABELS[f.procStatus]}
                         {f.importResult && ` — ${f.importResult.imported_count} importadas, ${f.importResult.duplicate_count} duplicatas`}
+                        {f.procStatus === 'done' && f.analysis?.balance_will_match === true && ' — saldo validado ✓'}
                         {f.investmentResult && ` — ${f.investmentResult.positions_count} posicoes, R$ ${Number(f.investmentResult.total_value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                        {f.procStatus === 'balance_blocked' && ` — ${balanceDivergenceMsg(f.analysis)}`}
                         {f.procError && ` — ${f.procError}`}
                       </p>
                     </div>
@@ -601,6 +641,7 @@ export default function ImportAgentPage() {
                         key={f.id}
                         className={`flex items-center gap-3 p-3 rounded-lg border ${
                           f.procStatus === 'error' ? 'border-rose-200 bg-rose-50' :
+                          f.procStatus === 'balance_blocked' ? 'border-amber-200 bg-amber-50' :
                           f.procStatus === 'done' ? 'border-emerald-200 bg-emerald-50' :
                           'border-slate-200 bg-slate-50'
                         }`}
@@ -625,11 +666,17 @@ export default function ImportAgentPage() {
                                 {formatCurrency(Number(f.investmentResult.total_value))}
                               </>
                             )}
+                            {f.procStatus === 'done' && f.analysis?.balance_will_match === true && (
+                              <span className="text-emerald-700"> — saldo validado ✓</span>
+                            )}
                             {f.procStatus === 'skipped' && 'Pulado (todas duplicatas ou excluido)'}
+                            {f.procStatus === 'balance_blocked' && (
+                              <span className="text-amber-700">{balanceDivergenceMsg(f.analysis)}</span>
+                            )}
                             {f.procError && <span className="text-rose-600">{f.procError}</span>}
                           </p>
                         </div>
-                        {f.procStatus === 'error' && (
+                        {(f.procStatus === 'error' || f.procStatus === 'balance_blocked') && (
                           <Link
                             href="/importar"
                             className="text-xs text-primary-600 hover:text-primary-800 flex items-center gap-1"

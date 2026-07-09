@@ -177,6 +177,12 @@ export interface ImportAnalysis {
   // Running balance
   running_balance_final: number | null;
   first_balance_divergence_row: number | null;
+  // Validação de saldo projetado (null = extrato sem coluna de saldo, não validável)
+  statement_final_balance: number | null;
+  account_current_balance: number | null;
+  projected_balance: number | null;
+  balance_projected_difference: number | null;
+  balance_will_match: boolean | null;
   transactions_preview: TransactionPreviewRow[];
 }
 

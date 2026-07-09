@@ -160,6 +160,14 @@ class ImportAnalysis(BaseModel):
     running_balance_final: Optional[Decimal] = None
     first_balance_divergence_row: Optional[int] = None
 
+    # Validação de saldo projetado (para o agente decidir se pode gravar)
+    # None quando o extrato não tem coluna de saldo -> não é possível validar
+    statement_final_balance: Optional[Decimal] = None    # Saldo final do extrato (última linha)
+    account_current_balance: Optional[Decimal] = None    # Saldo atual da conta antes do import
+    projected_balance: Optional[Decimal] = None          # current_balance + calculated_total
+    balance_projected_difference: Optional[Decimal] = None  # statement_final - projected
+    balance_will_match: Optional[bool] = None            # abs(diff) < 0.01
+
     # Lista completa de transações para revisão
     transactions_preview: List[TransactionPreviewRow] = []
 
