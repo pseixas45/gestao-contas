@@ -171,10 +171,15 @@ function getFileType(f: AgentFile): string {
 
 function balanceDivergenceMsg(a: ImportAnalysis | null): string | null {
   if (!a || a.balance_will_match !== false) return null;
+  if (a.balance_check_detail) return `${a.balance_check_detail} Revisar no import manual.`;
   const stmt = a.statement_final_balance ?? 0;
   const proj = a.projected_balance ?? 0;
   const diff = a.balance_projected_difference ?? 0;
   return `Saldo do extrato ${formatCurrency(stmt)} ≠ projetado ${formatCurrency(proj)} (diferença ${formatCurrency(diff)}). Possivel lancamento faltante ou duplicado — revisar no import manual.`;
+}
+
+function balanceOkMsg(a: ImportAnalysis | null): string {
+  return a?.balance_check_detail ? ` — ${a.balance_check_detail}` : ' — saldo validado ✓';
 }
 
 let idCounter = 0;
@@ -575,7 +580,7 @@ export default function ImportAgentPage() {
                       <p className="text-xs text-slate-500">
                         {STATUS_LABELS[f.procStatus]}
                         {f.importResult && ` — ${f.importResult.imported_count} importadas, ${f.importResult.duplicate_count} duplicatas`}
-                        {f.procStatus === 'done' && f.analysis?.balance_will_match === true && ' — saldo validado ✓'}
+                        {f.procStatus === 'done' && f.analysis?.balance_will_match === true && balanceOkMsg(f.analysis)}
                         {f.investmentResult && ` — ${f.investmentResult.positions_count} posicoes, R$ ${Number(f.investmentResult.total_value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
                         {f.procStatus === 'balance_blocked' && ` — ${balanceDivergenceMsg(f.analysis)}`}
                         {f.procError && ` — ${f.procError}`}
@@ -667,7 +672,7 @@ export default function ImportAgentPage() {
                               </>
                             )}
                             {f.procStatus === 'done' && f.analysis?.balance_will_match === true && (
-                              <span className="text-emerald-700"> — saldo validado ✓</span>
+                              <span className="text-emerald-700">{balanceOkMsg(f.analysis)}</span>
                             )}
                             {f.procStatus === 'skipped' && 'Pulado (todas duplicatas ou excluido)'}
                             {f.procStatus === 'balance_blocked' && (

@@ -126,6 +126,84 @@ async def process_import(
         raise HTTPException(status_code=500, detail=f"Erro ao processar importação: {str(e)}")
 
 
+def reconcile_daily_balance(raw_data, mapping, service):
+    """Reconciliação de saldo dia-a-dia para extratos que trazem saldo em linhas
+    'SALDO' (formato Itaú), em vez de saldo por linha de transação.
+
+    - 'SALDO ANTERIOR'  -> saldo de abertura do período
+    - 'SALDO ... DISPONÍVEL' (uma por dia) -> saldo de fechamento do dia (EOD)
+
+    Caminha: abertura + soma das transações de cada dia (ordem cronológica) e
+    compara com o saldo de fechamento daquele dia. A primeira divergência indica
+    lançamento faltante ou duplicado.
+
+    Retorna dict com balance_will_match (bool|None), balance_check_detail,
+    statement_final_balance. balance_will_match=None => formato não reconciliável.
+    """
+    from decimal import Decimal
+    result = {"balance_will_match": None, "balance_check_detail": None, "statement_final_balance": None}
+    if not mapping.balance_column or not mapping.date_column:
+        return result
+
+    opening = None
+    checkpoints = {}          # date -> Decimal (saldo EOD)
+    txn_by_date = {}          # date -> Decimal (soma das transações do dia)
+
+    for row in raw_data:
+        date_str = row.get(mapping.date_column, '')
+        trans_date = service._parse_date(date_str) if date_str else None
+        if not trans_date:
+            continue
+        desc = str(row.get(mapping.description_column, '') or '').strip().upper()
+        bal_raw = row.get(mapping.balance_column)
+        bal = service._parse_amount(bal_raw) if bal_raw not in (None, '') else None
+        amt_raw = row.get(mapping.amount_column) if mapping.amount_column else None
+        if amt_raw in (None, '') and mapping.valor_brl_column:
+            amt_raw = row.get(mapping.valor_brl_column)
+        amt = service._parse_amount(amt_raw) if amt_raw not in (None, '') else None
+
+        is_saldo_row = bal is not None and amt is None and 'SALDO' in desc
+        if is_saldo_row:
+            if 'ANTERIOR' in desc:
+                opening = bal
+            else:
+                checkpoints[trans_date] = bal
+        elif amt is not None:
+            txn_by_date[trans_date] = txn_by_date.get(trans_date, Decimal('0')) + amt
+
+    # Precisa de abertura + pelo menos um checkpoint diário para reconciliar
+    if opening is None or not checkpoints:
+        return result
+
+    all_dates = sorted(set(list(txn_by_date.keys()) + list(checkpoints.keys())))
+    running = opening
+    first_div = None
+    for d in all_dates:
+        running += txn_by_date.get(d, Decimal('0'))
+        if d in checkpoints and first_div is None:
+            if abs(running - checkpoints[d]) >= Decimal('0.01'):
+                first_div = (d, running, checkpoints[d])
+
+    last_ck = max(checkpoints.keys())
+    result["statement_final_balance"] = checkpoints[last_ck]
+    if first_div:
+        d, acc, ext = first_div
+        result["balance_will_match"] = False
+        result["balance_check_detail"] = (
+            f"Divergência de saldo em {d.strftime('%d/%m/%Y')}: acumulado "
+            f"R$ {acc:.2f} vs extrato R$ {ext:.2f} (diferença R$ {ext - acc:.2f}). "
+            f"Possível lançamento faltante ou duplicado."
+        )
+    else:
+        result["balance_will_match"] = True
+        result["balance_check_detail"] = (
+            f"Reconciliação diária OK: abertura R$ {opening:.2f} → "
+            f"fechamento R$ {checkpoints[last_ck]:.2f} em {last_ck.strftime('%d/%m/%Y')} "
+            f"({len(checkpoints)} dias conferidos)."
+        )
+    return result
+
+
 @router.post("/analyze", response_model=ImportAnalysis)
 async def analyze_import(
     data: ImportProcess,
@@ -447,17 +525,36 @@ async def analyze_import(
     positive_total = sum(positive_amounts, Decimal("0.00"))
     negative_total = sum(negative_amounts, Decimal("0.00"))
 
-    # Validação de saldo projetado: saldo_atual + novas transações deve bater
-    # com o saldo final do extrato. Só é possível se o extrato tem coluna de saldo.
-    statement_final_balance = last_file_balance
+    # Validação de saldo. Duas estratégias:
+    # 1) Reconciliação diária (extratos com linhas SALDO, ex: Itaú) — valida a
+    #    consistência interna do extrato (detecta lançamento faltante/duplicado).
+    # 2) Fallback: saldo projetado (extratos com saldo por linha) — saldo_atual +
+    #    novas transações deve bater com o último saldo do arquivo.
     account_current_balance = account.current_balance
+    statement_final_balance = None
     projected_balance = None
     balance_projected_difference = None
     balance_will_match = None
-    if statement_final_balance is not None:
+    balance_check_detail = None
+    balance_check_method = None
+
+    recon = reconcile_daily_balance(raw_data, mapping, service)
+    if recon["balance_will_match"] is not None:
+        statement_final_balance = recon["statement_final_balance"]
+        balance_will_match = recon["balance_will_match"]
+        balance_check_detail = recon["balance_check_detail"]
+        balance_check_method = "daily_reconciliation"
+    elif last_file_balance is not None:
+        statement_final_balance = last_file_balance
         projected_balance = account_current_balance + calculated_total
         balance_projected_difference = statement_final_balance - projected_balance
         balance_will_match = abs(balance_projected_difference) < Decimal("0.01")
+        balance_check_method = "projected"
+        if not balance_will_match:
+            balance_check_detail = (
+                f"Saldo do extrato R$ {statement_final_balance:.2f} ≠ projetado "
+                f"R$ {projected_balance:.2f} (diferença R$ {balance_projected_difference:.2f})."
+            )
 
     return ImportAnalysis(
         batch_id=data.batch_id,
@@ -483,6 +580,8 @@ async def analyze_import(
         projected_balance=projected_balance,
         balance_projected_difference=balance_projected_difference,
         balance_will_match=balance_will_match,
+        balance_check_detail=balance_check_detail,
+        balance_check_method=balance_check_method,
         transactions_preview=transactions_preview,
     )
 

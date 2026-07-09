@@ -167,6 +167,8 @@ class ImportAnalysis(BaseModel):
     projected_balance: Optional[Decimal] = None          # current_balance + calculated_total
     balance_projected_difference: Optional[Decimal] = None  # statement_final - projected
     balance_will_match: Optional[bool] = None            # abs(diff) < 0.01
+    balance_check_detail: Optional[str] = None           # explicação legível da validação de saldo
+    balance_check_method: Optional[str] = None           # 'daily_reconciliation' | 'projected' | None
 
     # Lista completa de transações para revisão
     transactions_preview: List[TransactionPreviewRow] = []

@@ -183,6 +183,8 @@ export interface ImportAnalysis {
   projected_balance: number | null;
   balance_projected_difference: number | null;
   balance_will_match: boolean | null;
+  balance_check_detail: string | null;
+  balance_check_method: 'daily_reconciliation' | 'projected' | null;
   transactions_preview: TransactionPreviewRow[];
 }
 
