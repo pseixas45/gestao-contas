@@ -32,7 +32,7 @@ class ImportBatch(Base):
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
     filename = Column(String(255), nullable=False)
-    file_type = Column(Enum(FileType), nullable=False)
+    file_type = Column(Enum(FileType, inherit_schema=True), nullable=False)
 
     # Estatísticas
     total_records = Column(Integer, default=0)  # Total de linhas no arquivo
@@ -44,7 +44,7 @@ class ImportBatch(Base):
     date_start = Column(Date, nullable=True)  # Data mais antiga no lote
     date_end = Column(Date, nullable=True)    # Data mais recente no lote
 
-    status = Column(Enum(ImportStatus), default=ImportStatus.PENDING)
+    status = Column(Enum(ImportStatus, inherit_schema=True), default=ImportStatus.PENDING)
     error_message = Column(Text)  # Mensagem de erro detalhada
 
     # Dados temporários (caminho do arquivo durante processamento)

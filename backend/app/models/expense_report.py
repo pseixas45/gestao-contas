@@ -21,7 +21,7 @@ class ExpenseReport(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     reference_month = Column(String(7), nullable=False)  # YYYY-MM
-    status = Column(Enum(ExpenseReportStatus), default=ExpenseReportStatus.draft, nullable=False)
+    status = Column(Enum(ExpenseReportStatus, inherit_schema=True), default=ExpenseReportStatus.draft, nullable=False)
     notes = Column(String(500), nullable=True)
     total_brl = Column(Numeric(15, 2), nullable=False, default=Decimal("0.00"))
     created_at = Column(DateTime, default=datetime.utcnow)

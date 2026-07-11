@@ -26,7 +26,7 @@ class Transaction(Base):
     original_description = Column(String(500))  # Descrição original do extrato
 
     # Valor original (na moeda da conta)
-    original_currency = Column(Enum(CurrencyCode), default=CurrencyCode.BRL, nullable=False)
+    original_currency = Column(Enum(CurrencyCode, inherit_schema=True), default=CurrencyCode.BRL, nullable=False)
     original_amount = Column(Numeric(15, 2), nullable=False)  # Negativo = débito, Positivo = crédito
 
     # Valores convertidos (sempre preenchidos)

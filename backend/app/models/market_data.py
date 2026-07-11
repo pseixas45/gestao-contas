@@ -22,7 +22,7 @@ class MarketIndexRate(Base):
     __tablename__ = "market_index_rates"
 
     id = Column(Integer, primary_key=True, index=True)
-    index_code = Column(Enum(MarketIndexCode), nullable=False)
+    index_code = Column(Enum(MarketIndexCode, inherit_schema=True), nullable=False)
     date_ref = Column(Date, nullable=False)
     daily_rate = Column(Numeric(18, 10), nullable=True)   # Taxa diária (CDI, SELIC)
     monthly_rate = Column(Numeric(10, 6), nullable=True)  # Taxa mensal (IPCA, IGPM)

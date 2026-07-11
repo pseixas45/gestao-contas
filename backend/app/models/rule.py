@@ -25,7 +25,7 @@ class CategorizationRule(Base):
     id = Column(Integer, primary_key=True, index=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     pattern = Column(String(255), nullable=False)  # Padrão a ser buscado
-    match_type = Column(Enum(MatchType), default=MatchType.CONTAINS)
+    match_type = Column(Enum(MatchType, inherit_schema=True), default=MatchType.CONTAINS)
     priority = Column(Integer, default=0)  # Maior prioridade = aplicada primeiro
     is_active = Column(Boolean, default=True)
     hit_count = Column(Integer, default=0)  # Contador de vezes que a regra foi aplicada

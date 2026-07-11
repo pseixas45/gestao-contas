@@ -63,7 +63,7 @@ class AssetClass(Base):
     __tablename__ = "asset_classes"
 
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(Enum(AssetClassCode), unique=True, nullable=False)
+    code = Column(Enum(AssetClassCode, inherit_schema=True), unique=True, nullable=False)
     name = Column(String(80), nullable=False)
     color = Column(String(7), default="#6B7280")
     typical_liquidity_days = Column(Integer, default=1)  # D+1 default
@@ -94,9 +94,9 @@ class Asset(Base):
     is_active = Column(Boolean, default=True)
 
     # Estratégia de remuneração (para cálculo de valor na curva)
-    rate_index = Column(Enum(RateIndex), nullable=True)      # CDI, IPCA, PRE, etc.
+    rate_index = Column(Enum(RateIndex, inherit_schema=True), nullable=True)      # CDI, IPCA, PRE, etc.
     rate_spread = Column(Numeric(10, 4), nullable=True)       # 100 (100% CDI), 7.0 (IPCA+7%)
-    rate_type = Column(Enum(RateType), nullable=True)         # percentage ou spread
+    rate_type = Column(Enum(RateType, inherit_schema=True), nullable=True)         # percentage ou spread
     application_date = Column(Date, nullable=True)            # Data de aplicação
     maturity_date = Column(Date, nullable=True)               # Data de vencimento
 
@@ -191,7 +191,7 @@ class InvestmentGoal(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    type = Column(Enum(GoalType), nullable=False)
+    type = Column(Enum(GoalType, inherit_schema=True), nullable=False)
     name = Column(String(120), nullable=False)
     description = Column(String(500))
 

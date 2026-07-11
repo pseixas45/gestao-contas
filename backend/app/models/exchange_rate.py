@@ -35,7 +35,7 @@ class ExchangeRate(Base):
     date_ref = Column(Date, nullable=False)
 
     # Moeda (USD ou EUR - BRL é a moeda base)
-    currency = Column(Enum(CurrencyCode), nullable=False)
+    currency = Column(Enum(CurrencyCode, inherit_schema=True), nullable=False)
 
     # Cotações
     buy_rate = Column(Numeric(18, 6), nullable=False)   # Cotação de compra

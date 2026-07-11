@@ -18,7 +18,7 @@ class Category(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
-    type = Column(Enum(CategoryType), nullable=False)
+    type = Column(Enum(CategoryType, inherit_schema=True), nullable=False)
     color = Column(String(7), default="#6B7280")  # Cor para identificação visual
     icon = Column(String(50))  # Nome do ícone (lucide-react)
     parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)  # Subcategorias

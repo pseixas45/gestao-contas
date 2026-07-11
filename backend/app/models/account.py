@@ -33,10 +33,10 @@ class BankAccount(Base):
     bank_id = Column(Integer, ForeignKey("banks.id"), nullable=False)
     name = Column(String(100), nullable=False)  # Nome amigável (ex: "Itaú CC Principal")
     account_number = Column(String(50))
-    account_type = Column(Enum(AccountType), default=AccountType.BANK)
+    account_type = Column(Enum(AccountType, inherit_schema=True), default=AccountType.BANK)
 
     # Moeda da conta
-    currency = Column(Enum(CurrencyCode), default=CurrencyCode.BRL, nullable=False)
+    currency = Column(Enum(CurrencyCode, inherit_schema=True), default=CurrencyCode.BRL, nullable=False)
 
     # Saldos (na moeda da conta)
     initial_balance = Column(Numeric(15, 2), default=Decimal("0.00"))
