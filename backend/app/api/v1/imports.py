@@ -310,6 +310,13 @@ async def analyze_import(
                 error_count += 1
                 continue
 
+            # Inverter sinal para cartão de crédito (igual ao process_import).
+            # Sem isso, a detecção de duplicata do preview compara o valor do
+            # arquivo (+59,90) com o armazenado (-59,90) e nunca casa.
+            used_credit_debit = bool(mapping.credit_column or mapping.debit_column)
+            if account.is_credit_card and not used_credit_debit:
+                amount = -amount
+
             # Running balance e saldo do arquivo
             running_balance += amount
             file_balance_val = None

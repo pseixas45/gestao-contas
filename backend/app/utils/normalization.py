@@ -69,6 +69,14 @@ def normalize_for_hash(description: str) -> str:
     for pattern, replacement in BANK_PATTERN_NORMALIZATIONS:
         text = re.sub(pattern, replacement, text)
 
+    # Canonicalizar marcador de parcela no final para casar formatos diferentes
+    # do mesmo banco (CSV "01/02" ou "RA01/03" vs XLSX "1 DE 2") preservando o
+    # NÚMERO da parcela: parcela 1 e parcela 2 continuam distintas ("1/10" != "2/10").
+    def _canon_parc(m):
+        return f" {int(m.group(1))}/{int(m.group(2))}"
+    text = re.sub(r'(\d{1,2})\s+DE\s+(\d{1,2})\s*$', _canon_parc, text)   # "1 DE 2" -> " 1/2"
+    text = re.sub(r'(\d{1,2})\s*/\s*(\d{1,2})\s*$', _canon_parc, text)     # "01/02","RA01/03" -> " 1/2"
+
     # Remover números de referência longos no final (6+ dígitos)
     text = re.sub(r'\s+\d{6,}\s*$', '', text)
 
