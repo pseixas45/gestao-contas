@@ -1169,12 +1169,15 @@ class ImportService:
         if not rows:
             return []
 
-        # Primeira linha como cabeçalho
-        headers = [str(h).strip() if h else f'col_{i}' for i, h in enumerate(rows[0])]
+        # Detectar a linha de cabeçalho real (Itaú/Master exportam .xlsx com
+        # logo/metadados/dados de fatura antes do cabeçalho da tabela)
+        header_row = self._find_header_row([list(r) for r in rows])
+
+        headers = [str(h).strip() if h else f'col_{i}' for i, h in enumerate(rows[header_row])]
 
         # Converter para dicionários
         result = []
-        for row in rows[1:]:
+        for row in rows[header_row + 1:]:
             if any(cell is not None for cell in row):
                 row_dict = {
                     headers[i]: row[i] if i < len(row) else None
