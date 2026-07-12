@@ -19,7 +19,7 @@ from app.models import (
     RateIndex, RateType,
 )
 from app.models.import_batch import ImportStatus, FileType
-from app.services.parsers import XPPdfParser, ItauExtratoMensalParser, C6PdfParser
+from app.services.parsers import XPPdfParser, XPXlsxParser, ItauExtratoMensalParser, C6PdfParser
 
 
 class InvestmentImportService:
@@ -67,6 +67,9 @@ class InvestmentImportService:
     def _get_parser(self, provider: str, file_path: str):
         provider = provider.lower()
         if provider == "xp":
+            # Posição Detalhada Histórica vem em .xlsx; histórico em .pdf
+            if Path(file_path).suffix.lower() in (".xlsx", ".xls"):
+                return XPXlsxParser(file_path)
             return XPPdfParser(file_path)
         elif provider == "itau":
             return ItauExtratoMensalParser(file_path)
