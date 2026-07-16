@@ -1,6 +1,6 @@
 """Endpoints REST para gestão de investimentos."""
 from typing import List, Optional
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 import os
 import tempfile
@@ -14,6 +14,7 @@ from app.models import (
     User, BankAccount, Bank,
     AssetClass, Asset, InvestmentSnapshot, InvestmentPosition, InvestmentGoal,
 )
+from app.models.investment import GoalType
 from app.schemas.investment import (
     AssetClassResponse,
     AssetCreate, AssetUpdate, AssetResponse,
@@ -509,9 +510,25 @@ def goals_progress(
         InvestmentGoal.user_id == current_user.id,
         InvestmentGoal.is_active == True,
     ).all()
+
+    # Pré-computar uma vez (cache + séries) e reusar para todas as metas
     out = []
+    if goals:
+        cache = analysis._SnapshotCache(db)
+        overview = analysis.get_portfolio_overview(db, cache=cache)
+        types = {g.type for g in goals}
+        contributions = None
+        if GoalType.MONTHLY_CONTRIBUTION in types:
+            history = analysis.get_history(db, cache=cache)
+            contributions = analysis.get_monthly_contributions(db, cache=cache, history=history)
+        allocation = None
+        if GoalType.ALLOCATION_BY_CLASS in types:
+            allocation = analysis.get_allocation(db, group_by="class", cache=cache)
     for g in goals:
-        prog = analysis.evaluate_goal_progress(db, g)
+        prog = analysis.evaluate_goal_progress(
+            db, g, cache=cache, overview=overview,
+            contributions=contributions, allocation=allocation,
+        )
         target_class_name = g.target_class.name if g.target_class else None
         out.append({
             "id": g.id,
@@ -610,7 +627,7 @@ def get_dashboard(
         "exposure": analysis.get_exposure(db, account_id, cache=cache),
         "risk": analysis.get_risk_summary(db, account_id, cache=cache),
         "liquidity": analysis.get_liquidity(db, account_id, cache=cache),
-        "contributions": analysis.get_monthly_contributions(db, account_id, cache=cache),
+        "contributions": analysis.get_monthly_contributions(db, account_id, cache=cache, history=history),
     }
 
 
@@ -873,6 +890,7 @@ def monthly_yield_endpoint(
 
 @router.get("/position-evolution")
 def position_evolution(
+    bank_id: Optional[int] = None,
     account_id: Optional[int] = None,
     asset_class_id: Optional[int] = None,
     asset_id: Optional[int] = None,
@@ -881,129 +899,137 @@ def position_evolution(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Evolução de posições: ativos nas linhas × meses nas colunas."""
+    """Evolução da carteira: ativos nas linhas × meses nas colunas.
+
+    Cada célula (ativo, mês) usa o dado MAIS RECENTE disponível: a posição do
+    snapshot mais recente da conta com data <= fim do mês (carry-forward). Assim
+    todos os meses do intervalo ficam preenchidos mesmo sem snapshot no mês exato.
+
+    Intervalo padrão: início do ano atual até o mês anterior ao atual.
+    Filtros: intervalo de meses (date_from/date_to), banco (bank_id), ativo.
+    """
     from collections import defaultdict
+    from sqlalchemy.orm import selectinload
     import calendar
 
-    # Filtrar contas de investimento
+    today = date.today()
+    # Padrão: Jan do ano atual .. mês anterior ao atual
+    if not date_from:
+        date_from = f"{today.year}-01"
+    if not date_to:
+        prev = today.replace(day=1) - timedelta(days=1)
+        date_to = f"{prev.year}-{prev.month:02d}"
+
+    fy, fm = int(date_from.split("-")[0]), int(date_from.split("-")[1])
+    ty, tm = int(date_to.split("-")[0]), int(date_to.split("-")[1])
+
+    # Lista de meses (YYYY-MM) do intervalo + último dia de cada mês
+    target_months: List[str] = []
+    month_end: dict = {}
+    y, m = fy, fm
+    while (y, m) <= (ty, tm):
+        mk = f"{y}-{m:02d}"
+        target_months.append(mk)
+        month_end[mk] = date(y, m, calendar.monthrange(y, m)[1])
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+    # Contas de investimento (filtro por conta e/ou banco)
     accs_q = db.query(BankAccount).filter(
         BankAccount.is_active == True,
         BankAccount.account_type == "INVESTMENT",
     )
     if account_id:
         accs_q = accs_q.filter(BankAccount.id == account_id)
+    if bank_id:
+        accs_q = accs_q.filter(BankAccount.bank_id == bank_id)
     accounts = accs_q.all()
     account_ids = {a.id for a in accounts}
     accounts_map = {a.id: a.name for a in accounts}
 
-    if not account_ids:
-        return {"months": [], "assets": [], "accounts": []}
+    empty = {"months": target_months, "assets": [], "accounts": [], "banks": [], "asset_classes": []}
+    if not account_ids or not target_months:
+        return empty
 
-    # Buscar todos os snapshots
-    snaps_q = db.query(InvestmentSnapshot).filter(
-        InvestmentSnapshot.account_id.in_(account_ids),
+    # Snapshots das contas, agrupados por conta (ordenados por data)
+    snapshots = (
+        db.query(InvestmentSnapshot)
+        .filter(InvestmentSnapshot.account_id.in_(account_ids))
+        .order_by(InvestmentSnapshot.snapshot_date)
+        .all()
     )
-    snapshots = snaps_q.all()
-    snap_ids = {s.id for s in snapshots}
+    if not snapshots:
+        return empty
+    snaps_by_acc: dict = defaultdict(list)
+    for s in snapshots:
+        snaps_by_acc[s.account_id].append(s)
 
-    if not snap_ids:
-        return {"months": [], "assets": [], "accounts": []}
-
-    # Buscar posições com joins
-    from sqlalchemy.orm import selectinload
+    # Posições de todos os snapshots, agrupadas por snapshot_id
+    snap_ids = [s.id for s in snapshots]
     positions = (
         db.query(InvestmentPosition)
         .options(selectinload(InvestmentPosition.asset).selectinload(Asset.asset_class))
         .filter(InvestmentPosition.snapshot_id.in_(snap_ids))
         .all()
     )
+    pos_by_snap: dict = defaultdict(list)
+    for p in positions:
+        pos_by_snap[p.snapshot_id].append(p)
 
-    # Mapear snapshot_id -> snapshot
-    snap_map = {s.id: s for s in snapshots}
+    # Para cada conta e mês, escolher o snapshot mais recente com data <= fim do mês
+    data: dict = defaultdict(dict)   # a_key -> {month -> value}
+    asset_info: dict = {}
+    for acc in accounts:
+        snaps = snaps_by_acc.get(acc.id, [])  # já ordenados asc
+        for mk in target_months:
+            me = month_end[mk]
+            chosen = None
+            for s in snaps:
+                if s.snapshot_date <= me:
+                    chosen = s
+                else:
+                    break
+            if chosen is None:
+                continue
+            for pos in pos_by_snap.get(chosen.id, []):
+                asset = pos.asset
+                if not asset:
+                    continue
+                if asset_class_id and asset.asset_class_id != asset_class_id:
+                    continue
+                if asset_id and asset.id != asset_id:
+                    continue
+                a_key = f"{asset.id}_{acc.id}"
+                if a_key not in asset_info:
+                    asset_info[a_key] = {
+                        "key": a_key,
+                        "asset_id": asset.id,
+                        "asset_name": asset.name,
+                        "asset_class": asset.asset_class.name if asset.asset_class else None,
+                        "asset_class_id": asset.asset_class_id,
+                        "asset_class_color": asset.asset_class.color if asset.asset_class else None,
+                        "account_id": acc.id,
+                        "account_name": accounts_map.get(acc.id, ""),
+                    }
+                data[a_key][mk] = data[a_key].get(mk, 0.0) + float(pos.value or 0)
 
-    # Filtro de período
-    date_from_parsed = None
-    date_to_parsed = None
-    if date_from:
-        parts = date_from.split("-")
-        date_from_parsed = date(int(parts[0]), int(parts[1]), 1)
-    if date_to:
-        parts = date_to.split("-")
-        last_day = calendar.monthrange(int(parts[0]), int(parts[1]))[1]
-        date_to_parsed = date(int(parts[0]), int(parts[1]), last_day)
-
-    # Organizar dados: asset_key -> {month -> value}
-    # asset_key = (asset_id, account_id) para distinguir mesmo ativo em contas diferentes
-    data: dict = defaultdict(lambda: defaultdict(lambda: None))
-    asset_info: dict = {}  # asset_key -> {name, class, account, ...}
-    months_set: set = set()
-
-    for pos in positions:
-        snap = snap_map.get(pos.snapshot_id)
-        if not snap:
-            continue
-
-        sd = snap.snapshot_date
-
-        # Filtro de período
-        if date_from_parsed and sd < date_from_parsed:
-            continue
-        if date_to_parsed and sd > date_to_parsed:
-            continue
-
-        asset = pos.asset
-        if not asset:
-            continue
-
-        # Filtro de classe
-        if asset_class_id and asset.asset_class_id != asset_class_id:
-            continue
-
-        # Filtro de ativo
-        if asset_id and asset.id != asset_id:
-            continue
-
-        month_key = sd.strftime("%Y-%m")
-        months_set.add(month_key)
-
-        a_key = f"{asset.id}_{snap.account_id}"
-
-        if a_key not in asset_info:
-            asset_info[a_key] = {
-                "key": a_key,
-                "asset_id": asset.id,
-                "asset_name": asset.name,
-                "asset_class": asset.asset_class.name if asset.asset_class else None,
-                "asset_class_id": asset.asset_class_id,
-                "asset_class_color": asset.asset_class.color if asset.asset_class else None,
-                "account_id": snap.account_id,
-                "account_name": accounts_map.get(snap.account_id, ""),
-            }
-
-        # Se já existe valor para esse mês (duplicata), somar
-        existing = data[a_key][month_key]
-        val = float(pos.value or 0)
-        if existing is not None:
-            data[a_key][month_key] = existing + val
-        else:
-            data[a_key][month_key] = val
-
-    # Ordenar meses
-    sorted_months = sorted(months_set)
-
-    # Montar resultado
+    # Montar linhas (ativos)
     assets_result = []
     for a_key, info in sorted(asset_info.items(), key=lambda x: x[1]["asset_name"]):
-        values = {}
-        for m in sorted_months:
-            v = data[a_key].get(m)
-            values[m] = round(v, 2) if v is not None else None
-        assets_result.append({
-            **info,
-            "values": values,
-        })
+        values = {m: (round(data[a_key][m], 2) if m in data[a_key] else None) for m in target_months}
+        assets_result.append({**info, "values": values})
 
-    # Lista de contas e classes para filtros
+    # Bancos das contas de investimento (para o filtro)
+    bank_ids = {a.bank_id for a in accounts if a.bank_id}
+    banks = []
+    if bank_ids:
+        banks = [
+            {"id": b.id, "name": b.name}
+            for b in db.query(Bank).filter(Bank.id.in_(bank_ids)).order_by(Bank.name).all()
+        ]
+
+    # Classes presentes (para filtro opcional)
     class_set = {}
     for info in asset_info.values():
         if info["asset_class_id"] and info["asset_class_id"] not in class_set:
@@ -1014,9 +1040,10 @@ def position_evolution(
             }
 
     return {
-        "months": sorted_months,
+        "months": target_months,
         "assets": assets_result,
         "accounts": [{"id": a.id, "name": a.name} for a in accounts],
+        "banks": banks,
         "asset_classes": list(class_set.values()),
     }
 

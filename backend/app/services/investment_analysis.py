@@ -30,9 +30,9 @@ def _safe_div(num: Decimal, den: Decimal) -> Decimal:
 
 
 def _compute_yield_and_contribution(
-    db: Session,
     curr_snapshot: "InvestmentSnapshot",
     prev_snapshot: Optional["InvestmentSnapshot"],
+    positions_by_snapshot: Dict[int, List["InvestmentPosition"]],
 ) -> Tuple[Decimal, Decimal]:
     """Calcula rendimento e aporte entre dois snapshots da mesma conta.
 
@@ -56,17 +56,9 @@ def _compute_yield_and_contribution(
 
     prev_val = prev_snapshot.total_value or Decimal("0")
 
-    # Carregar posições dos dois snapshots
-    curr_positions = (
-        db.query(InvestmentPosition)
-        .filter(InvestmentPosition.snapshot_id == curr_snapshot.id)
-        .all()
-    )
-    prev_positions = (
-        db.query(InvestmentPosition)
-        .filter(InvestmentPosition.snapshot_id == prev_snapshot.id)
-        .all()
-    )
+    # Posições dos dois snapshots (pré-carregadas no cache — sem query por chamada)
+    curr_positions = positions_by_snapshot.get(curr_snapshot.id, [])
+    prev_positions = positions_by_snapshot.get(prev_snapshot.id, [])
 
     # Se algum snapshot não tem posições, usar delta de total como rendimento
     if not curr_positions or not prev_positions:
@@ -214,18 +206,28 @@ class _SnapshotCache:
         }
         self.latest_snapshot_ids = {s.id for s in self._latest_by_account.values()}
 
-        # Posições (eager load asset + asset_class) das últimas snapshots
-        if self.latest_snapshot_ids:
-            self.latest_positions: List[InvestmentPosition] = (
+        # Posições de TODAS as snapshots carregadas de uma vez (eager load
+        # asset + asset_class), agrupadas por snapshot_id. Evita 2 queries por
+        # par de snapshots no cálculo de rendimento/aporte (get_history/overview).
+        all_snapshot_ids = [s.id for s in self.snapshots]
+        self.positions_by_snapshot: Dict[int, List[InvestmentPosition]] = defaultdict(list)
+        if all_snapshot_ids:
+            all_positions = (
                 db.query(InvestmentPosition)
                 .options(
                     selectinload(InvestmentPosition.asset).selectinload(Asset.asset_class),
                 )
-                .filter(InvestmentPosition.snapshot_id.in_(self.latest_snapshot_ids))
+                .filter(InvestmentPosition.snapshot_id.in_(all_snapshot_ids))
                 .all()
             )
-        else:
-            self.latest_positions = []
+            for p in all_positions:
+                self.positions_by_snapshot[p.snapshot_id].append(p)
+
+        # Posições das últimas snapshots (reaproveitando o que já foi carregado)
+        self.latest_positions: List[InvestmentPosition] = [
+            p for sid in self.latest_snapshot_ids
+            for p in self.positions_by_snapshot.get(sid, [])
+        ]
 
         # Datas distintas em que houve snapshot (qualquer conta)
         self.distinct_dates: List[date] = sorted({s.snapshot_date for s in self.snapshots})
@@ -331,7 +333,7 @@ def get_portfolio_overview(
             continue
         if prev_snap:
             prev_total += prev_snap.total_value or Decimal("0")
-        rendimento, aporte = _compute_yield_and_contribution(db, curr_snap, prev_snap)
+        rendimento, aporte = _compute_yield_and_contribution(curr_snap, prev_snap, cache.positions_by_snapshot)
         total_rendimento += rendimento
         total_aporte += aporte
     if prev_total or total_rendimento:
@@ -383,7 +385,7 @@ def get_history(db: Session, account_id: Optional[int] = None, cache: Optional[_
                     continue
                 if prev_snap:
                     prev_total_comp += prev_snap.total_value or Decimal("0")
-                rendimento, aporte = _compute_yield_and_contribution(db, curr_snap, prev_snap)
+                rendimento, aporte = _compute_yield_and_contribution(curr_snap, prev_snap, cache.positions_by_snapshot)
                 month_rendimento += rendimento
                 month_aporte += aporte
             if prev_total_comp > 0:
@@ -599,10 +601,14 @@ def get_risk_summary(db: Session, account_id: Optional[int] = None, cache: Optio
 # ============================================================
 
 def get_monthly_contributions(
-    db: Session, account_id: Optional[int] = None, cache: Optional[_SnapshotCache] = None
+    db: Session, account_id: Optional[int] = None, cache: Optional[_SnapshotCache] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Aportes mensais (diferença de total_invested entre snapshots)."""
-    series = get_history(db, account_id, cache=cache)
+    """Aportes mensais (diferença de total_invested entre snapshots).
+
+    Aceita `history` já calculado para evitar recomputar a série (custoso).
+    """
+    series = history if history is not None else get_history(db, account_id, cache=cache)
     out = []
     prev_invested = None
     for s in series:
@@ -623,9 +629,21 @@ def get_monthly_contributions(
 # Progresso de metas
 # ============================================================
 
-def evaluate_goal_progress(db: Session, goal: InvestmentGoal) -> Dict[str, Any]:
-    """Calcula progresso atual de uma meta."""
-    overview = get_portfolio_overview(db)
+def evaluate_goal_progress(
+    db: Session, goal: InvestmentGoal,
+    cache: Optional[_SnapshotCache] = None,
+    overview: Optional[Dict[str, Any]] = None,
+    contributions: Optional[List[Dict[str, Any]]] = None,
+    allocation: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Calcula progresso atual de uma meta.
+
+    Aceita cache/overview/contributions/allocation já calculados para avaliar
+    várias metas sem recomputar (evita N caches para N metas).
+    """
+    cache = cache or _SnapshotCache(db)
+    if overview is None:
+        overview = get_portfolio_overview(db, cache=cache)
     if goal.type == GoalType.PORTFOLIO_TOTAL:
         current = Decimal(str(overview["total_value"]))
         target = goal.target_value or Decimal("0")
@@ -634,7 +652,7 @@ def evaluate_goal_progress(db: Session, goal: InvestmentGoal) -> Dict[str, Any]:
 
     if goal.type == GoalType.MONTHLY_CONTRIBUTION:
         # Pegar último mês com aporte
-        contribs = get_monthly_contributions(db)
+        contribs = contributions if contributions is not None else get_monthly_contributions(db, cache=cache)
         if contribs:
             last = contribs[-1]
             current = Decimal(str(last["contribution"] or 0))
@@ -652,7 +670,7 @@ def evaluate_goal_progress(db: Session, goal: InvestmentGoal) -> Dict[str, Any]:
     if goal.type == GoalType.ALLOCATION_BY_CLASS:
         if not goal.target_class_id:
             return {"current": 0.0, "progress_pct": 0.0}
-        alloc = get_allocation(db, group_by="class")
+        alloc = allocation if allocation is not None else get_allocation(db, group_by="class", cache=cache)
         cls = db.query(AssetClass).filter(AssetClass.id == goal.target_class_id).first()
         if not cls:
             return {"current": 0.0, "progress_pct": 0.0}

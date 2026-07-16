@@ -906,6 +906,7 @@ export interface PositionEvolutionData {
   months: string[];
   assets: PositionEvolutionAsset[];
   accounts: Array<{ id: number; name: string }>;
+  banks: Array<{ id: number; name: string }>;
   asset_classes: Array<{ id: number; name: string; color: string | null }>;
 }
 
@@ -1061,6 +1062,7 @@ export const investmentsApi = {
   },
 
   positionEvolution: async (params?: {
+    bank_id?: number;
     account_id?: number;
     asset_class_id?: number;
     asset_id?: number;
