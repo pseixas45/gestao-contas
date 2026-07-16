@@ -122,9 +122,18 @@ Browser → Vercel (frontend Next.js) → Render (backend FastAPI) → Supabase 
 
 ### Mudança no código → push automático
 
+**Regra de ouro: `git push origin master` = deploy em produção.** Só o que
+está na branch `master` no GitHub vai para produção. Commits em outras branches
+(ou só locais) **não** afetam produção até serem mergeados na `master` e pushados.
+
 Toda vez que você fizer `git push origin master`:
 1. **Render** detecta e faz redeploy do backend (~5 min)
 2. **Vercel** detecta e faz redeploy do frontend (~2 min)
+
+> ⚠️ **Banco é compartilhado (Supabase único p/ local e produção).** Ao contrário
+> do código, alterações de **dados/esquema** feitas por scripts/migrations locais
+> valem **imediatamente para produção** (mesmo sem push), porque produção lê o
+> mesmo Supabase. Cuidado ao rodar `ALTER TABLE`/cargas: já é "produção de dados".
 
 ### Migrar dados do SQLite local para o Supabase
 
@@ -158,18 +167,25 @@ python ../scripts/migrate_sqlite_to_postgres.py
 ```bash
 cd backend
 # Criar .env (copiar de .env.example) com URL do Supabase ou SQLite local
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8002
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend
 ```bash
 cd frontend
-# Criar .env.local com NEXT_PUBLIC_API_URL=http://localhost:8002
+# Criar .env.local com NEXT_PUBLIC_API_URL=http://localhost:8000
 npm install
 npm run dev
 ```
 
 Acesse: http://localhost:3000
+
+> ⚠️ **Porta local do backend = 8000** (não 8002). O `frontend/.env.local`
+> deve apontar para `http://localhost:8000`. Se a tela ficar "sem dados" ou
+> endpoints novos derem 404, quase sempre é `.env.local` apontando para a
+> porta/backend errado — confira e reinicie `npm run dev` (o Next só relê
+> `.env.local` ao reiniciar). Em **produção** isso não se aplica: o Vercel usa
+> a env var `NEXT_PUBLIC_API_URL` do painel (aponta para o Render).
 
 ---
 
