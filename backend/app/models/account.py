@@ -43,6 +43,9 @@ class BankAccount(Base):
     current_balance = Column(Numeric(15, 2), default=Decimal("0.00"))
 
     is_active = Column(Boolean, default=True)
+    # Se False, a conta é usada apenas como fonte de dados (ex: extrato de
+    # movimentações de investimento) e não aparece no dashboard/resumos.
+    show_in_dashboard = Column(Boolean, default=True, nullable=False, server_default="true")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -26,12 +26,14 @@ class AccountUpdate(BaseModel):
     currency: Optional[CurrencyCode] = None
     initial_balance: Optional[Decimal] = None
     is_active: Optional[bool] = None
+    show_in_dashboard: Optional[bool] = None
 
 
 class AccountResponse(AccountBase):
     id: int
     current_balance: Decimal
     is_active: bool
+    show_in_dashboard: bool = True
     created_at: datetime
     bank_name: Optional[str] = None  # Preenchido na API
     balance_brl: Optional[float] = None  # Saldo equivalente em BRL (para contas não-BRL)

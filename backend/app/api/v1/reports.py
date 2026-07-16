@@ -241,8 +241,17 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
     all_banks = db.query(Bank).all()
     bank_by_id = {b.id: (b.name, b.color) for b in all_banks}
 
-    # 1. Contas e saldos
-    accounts = db.query(BankAccount).filter(BankAccount.is_active == True).all()
+    # 1. Contas e saldos (excluir contas ocultas — fontes de dados que não
+    #    devem aparecer no dashboard, ex: extrato de movimentações XP)
+    accounts = db.query(BankAccount).filter(
+        BankAccount.is_active == True,
+        BankAccount.show_in_dashboard == True,
+    ).all()
+    hidden_account_ids = [
+        a.id for a in db.query(BankAccount.id).filter(
+            BankAccount.show_in_dashboard == False
+        ).all()
+    ]
 
     # Buscar últimas taxas de câmbio do cache (1 query por moeda)
     from app.models.exchange_rate import ExchangeRate as ExRate
@@ -312,10 +321,13 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
 
     month_end = (month_start + relativedelta(months=1)) - relativedelta(days=1)
     # Buscar só os campos necessários para evitar overhead de hidratar todos os campos
-    month_txn_rows = db.query(Transaction.category_id, Transaction.amount_brl).filter(
+    month_txn_q = db.query(Transaction.category_id, Transaction.amount_brl).filter(
         Transaction.date >= month_start,
         Transaction.date <= month_end,
-    ).all()
+    )
+    if hidden_account_ids:
+        month_txn_q = month_txn_q.filter(~Transaction.account_id.in_(hidden_account_ids))
+    month_txn_rows = month_txn_q.all()
 
     month_income = Decimal("0")
     month_expenses = Decimal("0")
@@ -337,9 +349,12 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
     month_expenses = abs(month_expenses)
 
     # 3. Pendentes
-    pending_count = db.query(func.count(Transaction.id)).filter(
+    pending_q = db.query(func.count(Transaction.id)).filter(
         (Transaction.category_id == None) | (Transaction.is_validated == False)
-    ).scalar() or 0
+    )
+    if hidden_account_ids:
+        pending_q = pending_q.filter(~Transaction.account_id.in_(hidden_account_ids))
+    pending_count = pending_q.scalar() or 0
 
     # 4. Top 5 categorias de despesa do mês (usando filtro Dashboard)
     cat_totals: dict[int, Decimal] = {}
@@ -366,10 +381,13 @@ def get_dashboard_summary(month: str = None, db: Session = Depends(get_db)):
     # 5. Evolução mensal (últimos 6 meses) — UMA query agregada, sem loop por mês
     evol_start = (month_start - relativedelta(months=5)).replace(day=1)
     evol_end = month_end
-    evol_rows = db.query(Transaction.date, Transaction.category_id, Transaction.amount_brl).filter(
+    evol_q = db.query(Transaction.date, Transaction.category_id, Transaction.amount_brl).filter(
         Transaction.date >= evol_start,
         Transaction.date <= evol_end,
-    ).all()
+    )
+    if hidden_account_ids:
+        evol_q = evol_q.filter(~Transaction.account_id.in_(hidden_account_ids))
+    evol_rows = evol_q.all()
 
     monthly_buckets: dict[str, dict[str, Decimal]] = {}
     for tdate, cat_id, amt_brl in evol_rows:

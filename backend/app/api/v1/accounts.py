@@ -37,13 +37,20 @@ router = APIRouter()
 @router.get("", response_model=List[AccountResponse])
 def list_accounts(
     active_only: bool = True,
+    include_hidden: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
-    """Listar todas as contas bancárias."""
+    """Listar contas bancárias.
+
+    Por padrão exclui contas com show_in_dashboard=False (fontes de dados
+    que não devem aparecer no dashboard). Use include_hidden=True para todas.
+    """
     query = db.query(BankAccount)
     if active_only:
         query = query.filter(BankAccount.is_active == True)
+    if not include_hidden:
+        query = query.filter(BankAccount.show_in_dashboard == True)
 
     from sqlalchemy.orm import joinedload
     accounts = query.options(joinedload(BankAccount.bank)).order_by(BankAccount.name).all()
