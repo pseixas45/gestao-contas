@@ -17,12 +17,32 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.stdout.reconfigure(encoding="utf-8")
 from datetime import date, datetime
 from decimal import Decimal
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import openpyxl
 from sqlalchemy import text
 from app.database import SessionLocal
 from app.models import Asset, InvestmentSnapshot, InvestmentPosition
+from app.services.parsers.rate_extractor import parse_rate_loose
+
+
+def _rate_label(raw):
+    """Rótulo de taxa p/ compor o nome de lotes (ex.: 'IPCA + 7,05' -> 'IPCA+7,05')."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s.replace(" ", "") if s else None
+
+
+def _rate_eq(a_idx, a_spread, f_idx, f_spread):
+    """Compara a taxa de um ativo existente com a taxa parseada do arquivo."""
+    if f_idx is None or a_idx != f_idx.value:
+        return False
+    if f_spread is None:
+        return a_spread is None
+    if a_spread is None:
+        return False
+    return abs(Decimal(str(a_spread)) - f_spread) < Decimal("0.001")
 
 ACCOUNT_ID = 11
 FILE = r"C:\Users\paulo\gestao-contas\extratos\XP Carteira Jan25 a Jun26.xlsx"
@@ -91,9 +111,9 @@ def main(commit):
             month_cols.append((i, ym, date(y, m, calendar.monthrange(y, m)[1])))
     print(f"Meses detectados: {len(month_cols)}  ({month_cols[0][1]} .. {month_cols[-1][1]})")
 
-    # Ativos existentes (para matching) — todos
+    # Ativos existentes (para matching) — todos, com a taxa (p/ distinguir lotes)
     existing = db.execute(text(
-        "SELECT id, name, name_normalized, asset_class_id, application_date FROM gestao_contas.assets"
+        "SELECT id, name, name_normalized, asset_class_id, application_date, rate_index::text, rate_spread FROM gestao_contas.assets"
     )).fetchall()
     by_exact = {}
     by_loose = {}
@@ -103,6 +123,9 @@ def main(commit):
 
     # Parse linhas de ativo
     data_rows = [r for r in rows[1:] if r and r[1]]
+    # Bases que aparecem em >1 linha = LOTES do mesmo título (mesmo nome, taxas
+    # diferentes) → o nome recebe a taxa como sufixo para virarem ativos distintos.
+    base_counts = Counter(norm_loose(str(r[1]).strip()) for r in data_rows if r[1])
     plan_assets = []   # dicts: {classe, ativo, rate, data_inv, valor_inv, month->value, asset_id, match}
     created = 0
     matched = 0
@@ -122,10 +145,22 @@ def main(commit):
         if not month_vals:
             continue  # ativo sem nenhum valor no periodo -> ignora
 
+        rate_idx, rate_spread, rate_type = parse_rate_loose(r[2])
+        is_lot = base_counts[norm_loose(ativo)] > 1
+
         ne, nl = norm_exact(ativo), norm_loose(ativo)
         match = by_exact.get(ne) or by_loose.get(nl)
+        method = "exato" if by_exact.get(ne) else ("loose" if match else None)
+        # Se não casou pelo nome puro, tenta desambiguar por TAXA: ativo cujo nome
+        # (loose) começa com o do arquivo E cuja taxa bate (lotes NTN-B etc.).
+        if not match and rate_idx is not None:
+            cands = [a for a in existing
+                     if norm_loose(a[1]).startswith(nl) and _rate_eq(a[5], a[6], rate_idx, rate_spread)]
+            if len(cands) == 1:
+                match = cands[0]
+                method = "taxa"
         asset_id = match[0] if match else None
-        method = "exato" if by_exact.get(ne) else ("loose" if match else "NOVO")
+        method = method or "NOVO"
         if match:
             matched += 1
         else:
@@ -134,6 +169,8 @@ def main(commit):
 
         plan_assets.append({
             "classe": classe, "ativo": ativo, "rate": rate,
+            "rate_idx": rate_idx, "rate_spread": rate_spread, "rate_type": rate_type,
+            "rate_label": _rate_label(r[2]), "is_lot": is_lot,
             "data_inv": data_inv, "valor_inv": valor_inv,
             "month_vals": month_vals, "asset_id": asset_id,
             "asset_class_id": CLASS_NAME_TO_ID.get(classe), "method": method,
@@ -184,22 +221,37 @@ def main(commit):
         json.dump(backup, f, ensure_ascii=False, indent=1)
     print(f"\nBackup salvo: {bkp_path} ({len(snaps)} snapshots, {len(poss)} posicoes)")
 
-    # 2) Criar ativos novos + atualizar application_date onde veio no arquivo
-    name_to_newasset = {}
+    # 2) Criar ativos novos + atualizar taxa/application_date onde veio no arquivo
     for pa in plan_assets:
         if pa["asset_id"] is None:
+            # Lote (mesmo nome-base, taxas diferentes) → taxa no nome p/ distinguir
+            nm = pa["ativo"]
+            if pa["is_lot"] and pa["rate_label"]:
+                nm = f'{pa["ativo"]} {pa["rate_label"]}'
             a = Asset(
-                code=None, name=pa["ativo"], name_normalized=norm_exact(pa["ativo"]),
-                asset_class_id=pa["asset_class_id"], application_date=pa["data_inv"], is_active=True,
+                code=None, name=nm, name_normalized=norm_exact(nm),
+                asset_class_id=pa["asset_class_id"], application_date=pa["data_inv"],
+                rate_index=pa["rate_idx"], rate_spread=pa["rate_spread"],
+                rate_type=pa["rate_type"], is_active=True,
             )
             db.add(a)
             db.flush()
             pa["asset_id"] = a.id
-            name_to_newasset[pa["ativo"]] = a.id
-        elif pa["data_inv"]:
+        else:
+            # Mantém taxa e application_date do ativo existente atualizados
             db.execute(text(
-                "UPDATE gestao_contas.assets SET application_date=:d WHERE id=:i AND application_date IS NULL"
-            ), {"d": pa["data_inv"], "i": pa["asset_id"]})
+                "UPDATE gestao_contas.assets SET "
+                " rate_index=COALESCE(:ri, rate_index),"
+                " rate_spread=COALESCE(:rs, rate_spread),"
+                " rate_type=COALESCE(:rt, rate_type),"
+                " application_date=COALESCE(application_date, :d),"
+                " updated_at=now() WHERE id=:i"
+            ), {
+                "ri": pa["rate_idx"].name if pa["rate_idx"] else None,
+                "rs": pa["rate_spread"],
+                "rt": pa["rate_type"].name if pa["rate_type"] else None,
+                "d": pa["data_inv"], "i": pa["asset_id"],
+            })
     db.commit()
 
     # 3) Deletar snapshots+posicoes atuais da conta 11

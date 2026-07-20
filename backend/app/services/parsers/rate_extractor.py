@@ -110,3 +110,54 @@ def _parse_num(s: str) -> Optional[Decimal]:
         return Decimal(s)
     except (InvalidOperation, ValueError):
         return None
+
+
+def _num_loose(s: str) -> Optional[Decimal]:
+    s = str(s)
+    s = s.replace(".", "").replace(",", ".") if "," in s else s.replace(",", ".")
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def parse_rate_loose(raw) -> Tuple[Optional[RateIndex], Optional[Decimal], Optional[RateType]]:
+    """Parser tolerante para a coluna RENDIMENTO da planilha XP Carteira.
+
+    Aceita formatos que o extract_rate estrito não cobre:
+      "IPCA + 7,05" / "IPC-A + 6,30%" (com ou sem %), "CDI + 4,6%",
+      "CDI" (→ 100% CDI), "TR", e numérico 0.1396 (→ pré-fixado 13,96%).
+    """
+    if raw is None:
+        return None, None, None
+    if isinstance(raw, (int, float)):
+        v = Decimal(str(raw))
+        pct = v * 100 if v < 1 else v
+        return RateIndex.PRE, pct.quantize(Decimal("0.0001")), RateType.SPREAD
+    s = str(raw).strip().upper().replace("\xa0", " ").replace("IPC-A", "IPCA").replace("%", "")
+    s = re.sub(r"A\.?\s*A\.?$", "", s).strip()
+    if not s:
+        return None, None, None
+    m = re.search(r"IPCA\s*\+?\s*([\d.,]+)", s)
+    if m:
+        return RateIndex.IPCA, _num_loose(m.group(1)), RateType.SPREAD
+    m = re.search(r"IGP-?M\s*\+\s*([\d.,]+)", s)
+    if m:
+        return RateIndex.IGPM, _num_loose(m.group(1)), RateType.SPREAD
+    m = re.search(r"SELIC\s*\+\s*([\d.,]+)", s)
+    if m:
+        return RateIndex.SELIC, _num_loose(m.group(1)), RateType.SPREAD
+    m = re.search(r"([\d.,]+)\s*(?:CDI|DI)\b", s)
+    if m:
+        return RateIndex.CDI, _num_loose(m.group(1)), RateType.PERCENTAGE
+    m = re.search(r"(?:CDI|DI)\s*\+\s*([\d.,]+)", s)
+    if m:
+        return RateIndex.CDI, _num_loose(m.group(1)), RateType.SPREAD
+    if s in ("CDI", "DI"):
+        return RateIndex.CDI, Decimal("100"), RateType.PERCENTAGE
+    if s == "TR":
+        return RateIndex.TR, Decimal("0"), RateType.SPREAD
+    m = re.match(r"^([\d.,]+)$", s)
+    if m:
+        return RateIndex.PRE, _num_loose(m.group(1)), RateType.SPREAD
+    return None, None, None
