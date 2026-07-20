@@ -266,19 +266,21 @@ class _SnapshotCache:
 # ============================================================
 # Fluxos mensais (aporte / rendimento a partir das categorias)
 # ============================================================
-# Categorias de fluxo de investimento (transações em qualquer conta):
+# Categorias de fluxo (selecionadas pelo CAMPO CATEGORIA, em qualquer conta):
 CAT_APLICACAO = 1
+CAT_JUROS = 14        # despesas de juros (ex.: juros de cartão)
 CAT_RENDIMENTO = 21
 CAT_RESGATE = 22
 
 
 def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
-    """Soma, por mês (YYYY-MM), os fluxos de investimento a partir das
-    categorias Aplicação/Resgate/Rendimento em TODAS as contas.
+    """Soma, por mês (YYYY-MM), os fluxos a partir do CAMPO CATEGORIA em TODAS
+    as contas.
 
     Retorna {ym: {aplic_abs, resg_abs, aporte, rend, juros}}.
-    - aporte = |Aplicação| − |Resgate|  (dinheiro novo líquido)
-    - juros  = subconjunto de Rendimento cujo lançamento é "PGTO JUROS"
+    - aporte = |Aplicação(1)| − |Resgate(22)|  (dinheiro novo líquido)
+    - rend   = Σ Rendimento(21)  (proventos de investimento; inclui cupons)
+    - juros  = Σ Juros(14)  (despesas de juros; normalmente negativo)
     """
     from app.models import Transaction
     flows: Dict[str, Dict[str, Decimal]] = defaultdict(
@@ -286,12 +288,12 @@ def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
                  "rend": Decimal("0"), "juros": Decimal("0")}
     )
     rows = (
-        db.query(Transaction.date, Transaction.category_id,
-                 Transaction.description, Transaction.amount_brl)
-        .filter(Transaction.category_id.in_([CAT_APLICACAO, CAT_RENDIMENTO, CAT_RESGATE]))
+        db.query(Transaction.date, Transaction.category_id, Transaction.amount_brl)
+        .filter(Transaction.category_id.in_(
+            [CAT_APLICACAO, CAT_JUROS, CAT_RENDIMENTO, CAT_RESGATE]))
         .all()
     )
-    for d, cat, desc, amt in rows:
+    for d, cat, amt in rows:
         amt = amt or Decimal("0")
         f = flows[d.strftime("%Y-%m")]
         if cat == CAT_APLICACAO:
@@ -300,8 +302,8 @@ def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
             f["resg_abs"] += abs(amt)
         elif cat == CAT_RENDIMENTO:
             f["rend"] += amt
-            if desc and desc.strip().upper().startswith("PGTO JUROS"):
-                f["juros"] += amt
+        elif cat == CAT_JUROS:
+            f["juros"] += amt
     for f in flows.values():
         f["aporte"] = f["aplic_abs"] - f["resg_abs"]
     return flows
@@ -316,7 +318,7 @@ def get_investment_series(
       - total_value: patrimônio (contas Carteira + XP Global)
       - variacao:    total_value(m) − total_value(m−1)
       - aporte:      |Aplicação| − |Resgate| do mês  (item 2)
-      - yield_value: variacao − aporte + (Rendimento − Juros)  (item 3)
+      - yield_value: variacao − aporte + Rendimento(21) − |Juros(14)|  (item 3)
       - yield_pct:   yield_value / total_value(m−1)  (rentab. do mês)
       - total_invested: capital acumulado ("Aportado") = base + Σ aportes (item 6)
     """
@@ -341,7 +343,8 @@ def get_investment_series(
             aportado_cum = v  # base = patrimônio inicial
         else:
             variacao = v - prev_v
-            yield_value = variacao - aporte + (rend_cat - juros)
+            # Juros (cat 14) é despesa lançada negativa → subtrai o módulo
+            yield_value = variacao - aporte + rend_cat - abs(juros)
             yield_ratio = float(yield_value / prev_v) if prev_v else 0.0
             aportado_cum = aportado_cum + aporte
 
