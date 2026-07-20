@@ -1,4 +1,5 @@
-import sys
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.stdout.reconfigure(encoding="utf-8")
 from decimal import Decimal
 from collections import defaultdict

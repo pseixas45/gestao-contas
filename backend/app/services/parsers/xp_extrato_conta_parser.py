@@ -1,13 +1,16 @@
 """Parser do Extrato da Conta Corrente XP (movimentações de caixa da corretora).
 
-Arquivo: "XP Extrato <conta> <periodo>.xlsx"
-Aba única (Planilha1). Cabeçalho na linha 13 (0-based):
-    Movimentação | Liquidação | Lançamento | (vazio) | Valor (R$) | Saldo (R$)
-As colunas úteis (0-based na linha): 1=Movimentação, 2=Liquidação,
-3=Lançamento(descrição), 5=Valor, 6=Saldo.
+Arquivo: "XP Extrato <conta> <periodo>.xlsx".
+O layout pode variar; o parser localiza a aba e a linha de cabeçalho que
+contêm "Movimentação" e "Lançamento", e mapeia as colunas pelo nome:
+    Movimentação | Liquidação | Lançamento | MOV | Valor (R$) | Saldo (R$)
 
-Ao contrário dos outros parsers XP (que geram snapshots de posição), este
-gera uma lista de MOVIMENTAÇÕES para virar transações na conta XP corrente,
+**Categoria vem da coluna MOV** (fonte autoritativa definida pelo usuário):
+    RESG → Resgate, APLIC → Aplicação, REND → Rendimento, TRANSF → Transferência
+Se não houver coluna MOV (arquivos antigos), cai no classificador por prefixo
+da descrição (classify_movement).
+
+Gera uma lista de MOVIMENTAÇÕES para virar transações na conta XP corrente,
 usada como fonte de dados para a análise de aplicações/resgates/rendimentos.
 """
 import re
@@ -18,9 +21,6 @@ from typing import Any, Dict, List, Optional
 import openpyxl
 
 
-# ------------------------------------------------------------------
-# Classificação de movimentações -> categoria
-# ------------------------------------------------------------------
 # IDs de categoria (schema gestao_contas)
 CAT_APLICACAO = 1
 CAT_IMPOSTOS = 12
@@ -28,67 +28,46 @@ CAT_RENDIMENTO = 21
 CAT_RESGATE = 22
 CAT_TRANSFERENCIA = 30
 
+# Coluna MOV -> categoria (autoritativo)
+MOV_TO_CATEGORY = {
+    "RESG": CAT_RESGATE,
+    "APLIC": CAT_APLICACAO,
+    "REND": CAT_RENDIMENTO,
+    "TRANSF": CAT_TRANSFERENCIA,
+}
+
 
 def classify_movement(desc: str, valor: Decimal) -> Dict[str, Any]:
-    """Classifica uma movimentação da conta XP.
+    """Deriva a categoria a partir do texto do Lançamento.
 
-    Retorna dict com:
-      - kind: rótulo bruto do tipo (COMPRA, RESGATE, TED_APORTE, ...)
-      - category_id: categoria sugerida
-      - external: True se é fluxo que cruza a fronteira da corretora
-                  (TED recebido/retirado) — usado no cálculo de rendimento.
-      - flow: 'aporte' | 'resgate' | 'aplicacao' | 'rendimento' |
-              'imposto' | 'outros'  (semântica para a análise)
+    Regras validadas com o usuário (avaliadas nesta PRECEDÊNCIA, que resolve
+    conflitos como "IOF Cambio" ou o fundo "Trend Investback"):
+        Resgate > Aplicação > Rendimento > Transferência
+
+    - Resgate: contém "RESGATE" ou "IOF"; ou "RECEBIMENTO DE TED" da própria
+      conta (CTA 4065643 — resgate interno, exceção do TED BCO 348).
+    - Aplicação: contém "APLICA", "INTEGRALIZA", "COMPRA" ou "CAMBIO".
+    - Rendimento: contém "JUROS", "RENDIMENTO", "AMORTIZA", "INVESTBACK" ou "PRÊMIO".
+    - Transferência: contém "TED BCO 341" (aportes/retiradas do titular).
+
+    Retorna dict com kind, category_id, flow e external.
     """
-    d = (desc or "").strip().upper()
-    pos = valor is not None and valor > 0
+    u = (desc or "").strip().upper()
 
-    def r(kind, cat, flow, external=False):
-        return {"kind": kind, "category_id": cat, "flow": flow, "external": external}
+    if ("RESGATE" in u) or ("IOF" in u) or ("RECEBIMENTO DE TED" in u and "CTA 4065643" in u):
+        cat, kind = CAT_RESGATE, "resgate"
+    elif any(k in u for k in ("APLICA", "INTEGRALIZA", "COMPRA", "CAMBIO", "CÂMBIO")):
+        cat, kind = CAT_APLICACAO, "aplicacao"
+    elif any(k in u for k in ("JUROS", "RENDIMENTO", "AMORTIZA", "INVESTBACK", "PREMIO", "PRÊMIO", "PRÉMIO")):
+        cat, kind = CAT_RENDIMENTO, "rendimento"
+    elif "TED BCO 341" in u:
+        cat, kind = CAT_TRANSFERENCIA, "transferencia"
+    else:
+        cat, kind = None, "outros"
 
-    # --- TEDs (distinguir pelos sufixos) ---
-    if d.startswith("TED"):
-        if "RECEBIMENTO DE TED" in d:
-            return r("TED_APORTE", CAT_TRANSFERENCIA, "aporte", external=True)
-        if "RETIRADA EM C/C" in d:
-            return r("TED_RETIRADA", CAT_TRANSFERENCIA, "resgate", external=True)
-        if "APLICA" in d:  # TED ... APLICAÇÃO FUNDOS <nome> (saída p/ fundo externo)
-            return r("TED_APLIC_FUNDO", CAT_APLICACAO, "aplicacao")
-        # TED genérico
-        return r("TED", CAT_TRANSFERENCIA, "aporte" if pos else "resgate", external=True)
-
-    # --- Impostos ---
-    if d.startswith("IRRF") or d.startswith("IOF") or d.startswith("IR -") or d.startswith("IR-"):
-        return r("IMPOSTO", CAT_IMPOSTOS, "imposto")
-
-    # --- Aplicações (saída de caixa p/ ativo) ---
-    if d.startswith("COMPRA"):
-        return r("COMPRA", CAT_APLICACAO, "aplicacao")
-    if d.startswith("INTEGRALIZA"):
-        return r("INTEGRALIZACAO", CAT_APLICACAO, "aplicacao")
-
-    # --- Resgates (entrada de caixa vinda de ativo) ---
-    if d.startswith("ADIANTAMENTO RESGATE"):
-        return r("ADIANT_RESGATE", CAT_RESGATE, "resgate")
-    if d.startswith("RESGATE"):
-        return r("RESGATE", CAT_RESGATE, "resgate")
-
-    # --- Rendimentos / proventos ---
-    if d.startswith("RENDIMENTO"):
-        return r("RENDIMENTO", CAT_RENDIMENTO, "rendimento")
-    if d.startswith("PGTO JUROS") or d.startswith("PGTO AMORTIZA") or d.startswith("PGTO"):
-        return r("PGTO_JUROS", CAT_RENDIMENTO, "rendimento")
-    if d.startswith("AMORTIZA"):
-        return r("AMORTIZACAO", CAT_RENDIMENTO, "rendimento")
-    if d.startswith("INVESTBACK"):
-        return r("INVESTBACK", CAT_RENDIMENTO, "rendimento")
-
-    # --- Câmbio ---
-    if d.startswith("CAMBIO") or d.startswith("CÂMBIO"):
-        return r("CAMBIO", CAT_TRANSFERENCIA, "outros")
-
-    # Fallback
-    return r("OUTROS", CAT_TRANSFERENCIA, "outros")
+    # Fluxo externo (cruza a corretora) — informativo p/ análise
+    external = ("RECEBIMENTO DE TED" in u) or ("RETIRADA EM C/C" in u)
+    return {"kind": kind, "category_id": cat, "flow": kind, "external": external}
 
 
 def _to_date(v: Any) -> Optional[date]:
@@ -115,7 +94,6 @@ def _to_decimal(v: Any) -> Optional[Decimal]:
     s = str(v).strip()
     if not s:
         return None
-    # formato brasileiro possível
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
     try:
@@ -124,55 +102,87 @@ def _to_decimal(v: Any) -> Optional[Decimal]:
         return None
 
 
+def _find_sheet_and_header(wb):
+    """Localiza (rows, header_idx, colmap) da aba com o extrato de movimentações."""
+    for ws in wb.worksheets:
+        rows = list(ws.iter_rows(values_only=True))
+        for i, row in enumerate(rows[:40]):
+            labels = {}
+            for k, c in enumerate(row):
+                if c is not None:
+                    labels[str(c).strip().lower()] = k
+            has_mov = any("movimenta" in l for l in labels)
+            has_lanc = any(("lançamento" in l or "lancamento" in l) for l in labels)
+            if has_mov and has_lanc:
+                colmap = {}
+                for label, k in labels.items():
+                    if "movimenta" in label:
+                        colmap.setdefault("date", k)
+                    elif "liquida" in label:
+                        colmap.setdefault("liq", k)
+                    elif "lança" in label or "lanca" in label:
+                        colmap.setdefault("desc", k)
+                    elif label == "mov":
+                        colmap.setdefault("mov", k)
+                    elif "valor" in label:
+                        colmap.setdefault("valor", k)
+                    elif "saldo" in label:
+                        colmap.setdefault("saldo", k)
+                return rows, i, colmap
+    return None, None, None
+
+
 def parse_xp_extrato_conta(path: str) -> List[Dict[str, Any]]:
     """Lê o xlsx e retorna a lista de movimentações classificadas.
 
     Cada item: {date, liquidation_date, description, amount(Decimal, com sinal),
-                saldo, kind, category_id, flow, external}
+                saldo, mov, kind, category_id, flow, external}
     """
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb.worksheets[0]
-    rows = list(ws.iter_rows(values_only=True))
+    rows, header_idx, colmap = _find_sheet_and_header(wb)
     wb.close()
+    if rows is None:
+        return []
 
-    # localizar linha de cabeçalho (contém "Movimentação" e "Lançamento")
-    header_idx = None
-    for i, row in enumerate(rows[:40]):
-        joined = "|".join("" if c is None else str(c) for c in row).lower()
-        if "movimenta" in joined and "lançamento" in joined.replace("ç", "ç"):
-            header_idx = i
-            break
-        if "movimenta" in joined and "lancamento" in joined:
-            header_idx = i
-            break
-    if header_idx is None:
-        header_idx = 13  # fallback conhecido
+    ci_date = colmap.get("date")
+    ci_desc = colmap.get("desc")
+    ci_val = colmap.get("valor")
+    ci_saldo = colmap.get("saldo")
+    ci_liq = colmap.get("liq")
+    ci_mov = colmap.get("mov")
+
+    def cell(row, idx):
+        return row[idx] if (idx is not None and idx < len(row)) else None
 
     movements: List[Dict[str, Any]] = []
     for row in rows[header_idx + 1:]:
         if row is None:
             continue
-        mov = _to_date(row[1]) if len(row) > 1 else None
-        liq = _to_date(row[2]) if len(row) > 2 else None
-        desc = row[3] if len(row) > 3 else None
-        valor = _to_decimal(row[5]) if len(row) > 5 else None
-        saldo = _to_decimal(row[6]) if len(row) > 6 else None
-
-        # linha válida requer data de movimentação, descrição e valor numérico
-        if mov is None or desc is None or valor is None:
+        mov_date = _to_date(cell(row, ci_date))
+        desc = cell(row, ci_desc)
+        valor = _to_decimal(cell(row, ci_val))
+        if mov_date is None or desc is None or valor is None:
             continue
         desc = str(desc).strip()
         if not desc:
             continue
 
         cls = classify_movement(desc, valor)
+        mov_code = cell(row, ci_mov)
+        mov_code = str(mov_code).strip().upper() if mov_code is not None else None
+        # Categoria DERIVADA do Lançamento (regra validada); MOV só como fallback
+        # para eventuais lançamentos que a regra não cubra.
+        category_id = cls["category_id"] or (MOV_TO_CATEGORY.get(mov_code) if mov_code else None)
+
         movements.append({
-            "date": mov,
-            "liquidation_date": liq,
+            "date": mov_date,
+            "liquidation_date": _to_date(cell(row, ci_liq)),
             "description": desc,
             "amount": valor,
-            "saldo": saldo,
+            "saldo": _to_decimal(cell(row, ci_saldo)),
+            "mov": mov_code,
             **cls,
+            "category_id": category_id,  # sobrescreve o do classify com o do MOV
         })
 
     return movements
