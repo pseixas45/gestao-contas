@@ -277,14 +277,16 @@ def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
     """Soma, por mês (YYYY-MM), os fluxos a partir do CAMPO CATEGORIA em TODAS
     as contas.
 
-    Retorna {ym: {aplic_abs, resg_abs, aporte, rend, juros}}.
-    - aporte = |Aplicação(1)| − |Resgate(22)|  (dinheiro novo líquido)
+    Retorna {ym: {aplic_abs, resg_net, aporte, rend, juros}}.
+    - aporte = |Aplicação(1)| − Resgate_líquido(22)  (dinheiro novo líquido)
+    - resg_net = Σ Resgate(22) COM SINAL — taxas (IRRF/IOF, negativas) reduzem
+      o valor resgatado.
     - rend   = Σ Rendimento(21)  (proventos de investimento; inclui cupons)
     - juros  = Σ Juros(14)  (despesas de juros; normalmente negativo)
     """
     from app.models import Transaction
     flows: Dict[str, Dict[str, Decimal]] = defaultdict(
-        lambda: {"aplic_abs": Decimal("0"), "resg_abs": Decimal("0"),
+        lambda: {"aplic_abs": Decimal("0"), "resg_net": Decimal("0"),
                  "rend": Decimal("0"), "juros": Decimal("0")}
     )
     rows = (
@@ -299,13 +301,13 @@ def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
         if cat == CAT_APLICACAO:
             f["aplic_abs"] += abs(amt)
         elif cat == CAT_RESGATE:
-            f["resg_abs"] += abs(amt)
+            f["resg_net"] += amt          # com sinal: taxas negativas reduzem
         elif cat == CAT_RENDIMENTO:
             f["rend"] += amt
         elif cat == CAT_JUROS:
             f["juros"] += amt
     for f in flows.values():
-        f["aporte"] = f["aplic_abs"] - f["resg_abs"]
+        f["aporte"] = f["aplic_abs"] - f["resg_net"]
     return flows
 
 
@@ -317,7 +319,7 @@ def get_investment_series(
     Por mês (data = fim do mês de cada snapshot):
       - total_value: patrimônio (contas Carteira + XP Global)
       - variacao:    total_value(m) − total_value(m−1)
-      - aporte:      |Aplicação| − |Resgate| do mês  (item 2)
+      - aporte:      |Aplicação| − Resgate_líquido do mês  (item 2; taxas reduzem o resgate)
       - yield_value: variacao − aporte + Rendimento(21) − |Juros(14)|  (item 3)
       - yield_pct:   yield_value / total_value(m−1)  (rentab. do mês)
       - total_invested: capital acumulado ("Aportado") = base + Σ aportes (item 6)
