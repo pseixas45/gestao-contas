@@ -182,8 +182,8 @@ export default function InvestimentosDashboardPage() {
 
         {hasData && (
           <>
-            {/* StatCards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* KPIs — ordem: Patrimônio · Variação · Aporte · Rendimento (R$/%) · Rentab. ano */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               <StatCard
                 title="Patrimônio Total"
                 value={formatCurrency(overview.total_value)}
@@ -194,52 +194,43 @@ export default function InvestimentosDashboardPage() {
               <StatCard
                 title="Variação no Mês"
                 value={overview.monthly_change != null ? formatCurrency(overview.monthly_change) : '—'}
-                subtitle={overview.monthly_change_pct != null ? `${overview.monthly_change_pct >= 0 ? '+' : ''}${overview.monthly_change_pct.toFixed(2)}%` : 'Sem comparação'}
+                subtitle="Patrimônio vs mês anterior"
                 icon={overview.monthly_change != null && overview.monthly_change >= 0 ? ArrowUpRight : ArrowDownRight}
                 color={overview.monthly_change != null && overview.monthly_change >= 0 ? 'emerald' : 'rose'}
               />
               <StatCard
-                title="Rentabilidade Total"
-                value={`${overview.yield_pct >= 0 ? '+' : ''}${overview.yield_pct.toFixed(2)}%`}
-                subtitle={formatCurrency(overview.yield_value)}
-                icon={TrendingUp}
-                color={overview.yield_pct >= 0 ? 'emerald' : 'rose'}
-              />
-              <StatCard
                 title="Aporte do Mês"
                 value={overview.monthly_contribution != null ? formatCurrency(overview.monthly_contribution) : '—'}
-                subtitle="Líquido (capital)"
+                subtitle="Aplicações − resgates"
                 icon={PiggyBank}
                 color="sky"
               />
+              <StatCard
+                title="Rendimento do Mês"
+                value={overview.monthly_yield_value != null ? formatCurrency(overview.monthly_yield_value) : '—'}
+                subtitle={overview.monthly_yield_pct != null ? `${overview.monthly_yield_pct >= 0 ? '+' : ''}${overview.monthly_yield_pct.toFixed(2)}%` : '—'}
+                icon={TrendingUp}
+                color={overview.monthly_yield_value != null && overview.monthly_yield_value >= 0 ? 'emerald' : 'rose'}
+              />
+              <StatCard
+                title="Rentabilidade no Ano"
+                value={overview.ytd_yield_pct != null ? `${overview.ytd_yield_pct >= 0 ? '+' : ''}${overview.ytd_yield_pct.toFixed(2)}%` : '—'}
+                subtitle="Acumulada (YTD)"
+                icon={LineChartIcon}
+                color={overview.ytd_yield_pct != null && overview.ytd_yield_pct >= 0 ? 'emerald' : 'rose'}
+              />
             </div>
 
-            {/* Rendimento e Valor Líquido */}
-            {(netValueData || monthlyYieldData) && (
+            {/* Valor Líquido (pós-IR) — secundário */}
+            {netValueData && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {monthlyYieldData && monthlyYieldData.length > 0 && (() => {
-                  // Se mês selecionado, buscar rendimento daquele mês; senão, último
-                  const targetMonth = selectedMonth || monthlyYieldData[monthlyYieldData.length - 1].date.substring(0, 7);
-                  const last = monthlyYieldData.find(d => d.date.startsWith(targetMonth)) || monthlyYieldData[monthlyYieldData.length - 1];
-                  return (
-                    <StatCard
-                      title="Rendimento do Mês"
-                      value={formatCurrency(last.yield_value)}
-                      subtitle={`${last.yield_pct >= 0 ? '+' : ''}${last.yield_pct.toFixed(2)}%`}
-                      icon={TrendingUp}
-                      color={last.yield_value >= 0 ? 'emerald' : 'rose'}
-                    />
-                  );
-                })()}
-                {netValueData && (
-                  <StatCard
-                    title="Valor Líquido (pós-IR)"
-                    value={formatCurrency(netValueData.total_net)}
-                    subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
-                    icon={Shield}
-                    color="sky"
-                  />
-                )}
+                <StatCard
+                  title="Valor Líquido (pós-IR)"
+                  value={formatCurrency(netValueData.total_net)}
+                  subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
+                  icon={Shield}
+                  color="sky"
+                />
               </div>
             )}
 

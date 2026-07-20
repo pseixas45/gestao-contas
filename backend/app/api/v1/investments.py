@@ -574,18 +574,16 @@ def get_dashboard(
     cache = analysis._SnapshotCache(db, account_id)
     history = analysis.get_history(db, account_id, cache=cache)
 
-    # Monthly yield calculado in-line (sem query extra)
-    monthly_yield = []
-    prev = None
-    for point in history:
-        entry = {"date": point["date"], "total_value": point["total_value"], "yield_value": 0, "yield_pct": 0}
-        if prev:
-            invested_delta = (point.get("total_invested") or 0) - (prev.get("total_invested") or 0)
-            yv = point["total_value"] - prev["total_value"] - max(invested_delta, 0)
-            entry["yield_value"] = round(yv, 2)
-            entry["yield_pct"] = round(yv / prev["total_value"] * 100, 2) if prev["total_value"] > 0 else 0
-        monthly_yield.append(entry)
-        prev = point
+    # (7) Rendimento mensal = item 3 por mês (já calculado na série)
+    monthly_yield = [
+        {
+            "date": p["date"],
+            "total_value": p["total_value"],
+            "yield_value": p["yield_value"],
+            "yield_pct": p["yield_pct"],
+        }
+        for p in history
+    ]
 
     # Net value summary (usa posições já carregadas no cache)
     net_summary = None

@@ -830,25 +830,30 @@ export interface PortfolioOverview {
   total_invested: number;
   yield_value: number;
   yield_pct: number;
-  monthly_change: number | null;
-  monthly_change_pct: number | null;
-  monthly_contribution: number | null;
+  monthly_change: number | null;          // (1) Variação no mês (R$)
+  monthly_change_pct?: number | null;
+  monthly_contribution: number | null;    // (2) Aporte do mês (R$)
+  monthly_yield_value?: number | null;    // (3) Rendimento do mês (R$)
+  monthly_yield_pct?: number | null;      // (3) Rentabilidade do mês (%)
+  ytd_yield_pct?: number | null;          // (5) Rentabilidade acumulada no ano (%)
   reference_date: string | null;
   accounts: Array<{
     account_id: number;
     account_name: string;
     snapshot_date: string;
     total_value: number;
-    total_invested: number;
+    total_invested?: number;
   }>;
 }
 
 export interface HistoryPoint {
   date: string;
   total_value: number;
-  total_invested: number;
-  yield_value: number;
-  monthly_change_pct: number | null;
+  total_invested: number;   // "Aportado" = capital acumulado
+  yield_value: number;      // (3) Rendimento do mês (R$)
+  yield_pct?: number;       // (3) Rentabilidade do mês (%)
+  variacao?: number;
+  aporte?: number;          // (2) Aporte do mês (R$)
 }
 
 export interface ExposureData {

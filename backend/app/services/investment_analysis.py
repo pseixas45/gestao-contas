@@ -264,6 +264,113 @@ class _SnapshotCache:
 
 
 # ============================================================
+# Fluxos mensais (aporte / rendimento a partir das categorias)
+# ============================================================
+# Categorias de fluxo de investimento (transações em qualquer conta):
+CAT_APLICACAO = 1
+CAT_RENDIMENTO = 21
+CAT_RESGATE = 22
+
+
+def _monthly_flows(db: Session) -> Dict[str, Dict[str, Decimal]]:
+    """Soma, por mês (YYYY-MM), os fluxos de investimento a partir das
+    categorias Aplicação/Resgate/Rendimento em TODAS as contas.
+
+    Retorna {ym: {aplic_abs, resg_abs, aporte, rend, juros}}.
+    - aporte = |Aplicação| − |Resgate|  (dinheiro novo líquido)
+    - juros  = subconjunto de Rendimento cujo lançamento é "PGTO JUROS"
+    """
+    from app.models import Transaction
+    flows: Dict[str, Dict[str, Decimal]] = defaultdict(
+        lambda: {"aplic_abs": Decimal("0"), "resg_abs": Decimal("0"),
+                 "rend": Decimal("0"), "juros": Decimal("0")}
+    )
+    rows = (
+        db.query(Transaction.date, Transaction.category_id,
+                 Transaction.description, Transaction.amount_brl)
+        .filter(Transaction.category_id.in_([CAT_APLICACAO, CAT_RENDIMENTO, CAT_RESGATE]))
+        .all()
+    )
+    for d, cat, desc, amt in rows:
+        amt = amt or Decimal("0")
+        f = flows[d.strftime("%Y-%m")]
+        if cat == CAT_APLICACAO:
+            f["aplic_abs"] += abs(amt)
+        elif cat == CAT_RESGATE:
+            f["resg_abs"] += abs(amt)
+        elif cat == CAT_RENDIMENTO:
+            f["rend"] += amt
+            if desc and desc.strip().upper().startswith("PGTO JUROS"):
+                f["juros"] += amt
+    for f in flows.values():
+        f["aporte"] = f["aplic_abs"] - f["resg_abs"]
+    return flows
+
+
+def get_investment_series(
+    db: Session, cache: Optional[_SnapshotCache] = None
+) -> List[Dict[str, Any]]:
+    """Série mensal consolidada do dashboard de investimentos.
+
+    Por mês (data = fim do mês de cada snapshot):
+      - total_value: patrimônio (contas Carteira + XP Global)
+      - variacao:    total_value(m) − total_value(m−1)
+      - aporte:      |Aplicação| − |Resgate| do mês  (item 2)
+      - yield_value: variacao − aporte + (Rendimento − Juros)  (item 3)
+      - yield_pct:   yield_value / total_value(m−1)  (rentab. do mês)
+      - total_invested: capital acumulado ("Aportado") = base + Σ aportes (item 6)
+    """
+    cache = cache or _SnapshotCache(db)
+    flows = _monthly_flows(db)
+
+    series: List[Dict[str, Any]] = []
+    prev_v: Optional[Decimal] = None
+    aportado_cum = Decimal("0")
+    for d in cache.distinct_dates:
+        ym = d.strftime("%Y-%m")
+        v = cache.sum_total_at_or_before(d)
+        f = flows.get(ym)
+        aporte = f["aporte"] if f else Decimal("0")
+        rend_cat = f["rend"] if f else Decimal("0")
+        juros = f["juros"] if f else Decimal("0")
+
+        if prev_v is None:
+            variacao = Decimal("0")
+            yield_value = Decimal("0")
+            yield_ratio = 0.0
+            aportado_cum = v  # base = patrimônio inicial
+        else:
+            variacao = v - prev_v
+            yield_value = variacao - aporte + (rend_cat - juros)
+            yield_ratio = float(yield_value / prev_v) if prev_v else 0.0
+            aportado_cum = aportado_cum + aporte
+
+        series.append({
+            "date": d.isoformat(),
+            "total_value": float(v),
+            "total_invested": float(aportado_cum),  # linha "Aportado"
+            "variacao": float(variacao),
+            "aporte": float(aporte),
+            "yield_value": float(yield_value),
+            "yield_pct": round(yield_ratio * 100, 2),
+            "yield_ratio": yield_ratio,  # sem arredondar (p/ acumulado)
+        })
+        prev_v = v
+    return series
+
+
+def _ytd_return_pct(series: List[Dict[str, Any]], target_ym: str) -> float:
+    """Rentabilidade acumulada no ano até target_ym (encadeada / time-weighted)."""
+    year = target_ym[:4]
+    acc = 1.0
+    for s in series:
+        sym = s["date"][:7]
+        if sym[:4] == year and sym <= target_ym:
+            acc *= (1 + s.get("yield_ratio", 0.0))
+    return round((acc - 1) * 100, 2)
+
+
+# ============================================================
 # Patrimônio + variação
 # ============================================================
 
@@ -277,21 +384,33 @@ def get_portfolio_overview(
     Se reference_date for informado, calcula para aquela data (em vez do último snapshot).
     """
     cache = cache or _SnapshotCache(db, account_id)
+    series = get_investment_series(db, cache)
 
-    # Se reference_date informado, usar snapshot mais recente <= reference_date por conta
+    if not series:
+        return {
+            "total_value": 0.0, "total_invested": 0.0,
+            "monthly_change": None, "monthly_contribution": None,
+            "monthly_yield_value": None, "monthly_yield_pct": None,
+            "ytd_yield_pct": None, "yield_value": 0.0, "yield_pct": 0.0,
+            "reference_date": (reference_date or date.today()).isoformat(),
+            "accounts": [],
+        }
+
+    # Ponto de referência: mês selecionado (<=) ou último disponível
     if reference_date:
-        target_date = reference_date
+        target_ym = reference_date.strftime("%Y-%m")
+        point = None
+        for s in series:
+            if s["date"][:7] <= target_ym:
+                point = s
+        point = point or series[0]
     else:
-        # Usar o último snapshot disponível
-        if cache.snapshots:
-            target_date = max(s.snapshot_date for s in cache.snapshots)
-        else:
-            target_date = date.today()
+        point = series[-1]
+    target_ym = point["date"][:7]
+    target_date = date.fromisoformat(point["date"])
 
-    total_value = Decimal("0")
-    total_invested = Decimal("0")
+    # Composição das contas nesse mês (patrimônio por conta)
     accounts_summary = []
-
     for acc_id, snaps in cache._snaps_by_account.items():
         chosen = None
         for s in snaps:
@@ -300,56 +419,26 @@ def get_portfolio_overview(
             else:
                 break
         if chosen:
-            total_value += chosen.total_value or Decimal("0")
-            total_invested += chosen.total_invested or Decimal("0")
             acc = cache.accounts_by_id.get(acc_id)
             accounts_summary.append({
                 "account_id": acc_id,
                 "account_name": acc.name if acc else str(acc_id),
                 "snapshot_date": chosen.snapshot_date.isoformat(),
                 "total_value": float(chosen.total_value or 0),
-                "total_invested": float(chosen.total_invested or 0),
             })
 
-    monthly_change = None
-    monthly_change_pct = None
-    monthly_contribution = None
-    # Usar último dia do mês anterior como referência
-    first_of_month = target_date.replace(day=1)
-    prev_target = first_of_month - timedelta(days=1)  # último dia do mês anterior
-    # Calcular rendimento e aporte por comparação de posições
-    total_rendimento = Decimal("0")
-    total_aporte = Decimal("0")
-    prev_total = Decimal("0")
-    for acc_id, snaps in cache._snaps_by_account.items():
-        curr_snap = None
-        prev_snap = None
-        for s in snaps:
-            if s.snapshot_date <= target_date:
-                curr_snap = s
-            if s.snapshot_date <= prev_target:
-                prev_snap = s
-        if not curr_snap:
-            continue
-        if prev_snap:
-            prev_total += prev_snap.total_value or Decimal("0")
-        rendimento, aporte = _compute_yield_and_contribution(curr_snap, prev_snap, cache.positions_by_snapshot)
-        total_rendimento += rendimento
-        total_aporte += aporte
-    if prev_total or total_rendimento:
-        monthly_change = total_rendimento
-        base = prev_total if prev_total else total_invested
-        monthly_change_pct = float(_safe_div(monthly_change, base) * 100) if base else None
-    monthly_contribution = float(total_aporte)
-
+    ytd = _ytd_return_pct(series, target_ym)
     return {
-        "total_value": float(total_value),
-        "total_invested": float(total_invested),
-        "yield_value": float((total_value - total_invested) if total_invested else Decimal("0")),
-        "yield_pct": float(_safe_div(total_value - total_invested, total_invested) * 100) if total_invested else 0.0,
-        "monthly_change": float(monthly_change) if monthly_change is not None else None,
-        "monthly_change_pct": monthly_change_pct,
-        "monthly_contribution": monthly_contribution,
+        "total_value": point["total_value"],
+        "total_invested": point["total_invested"],           # capital aportado acumulado
+        "monthly_change": point["variacao"],                 # (1) Variação no mês
+        "monthly_contribution": point["aporte"],             # (2) Aporte do mês
+        "monthly_yield_value": point["yield_value"],         # (3) Rendimento do mês (R$)
+        "monthly_yield_pct": point["yield_pct"],             # (3) Rentabilidade do mês (%)
+        "ytd_yield_pct": ytd,                                # (5) Rentabilidade acumulada no ano
+        # compat: rentabilidade "total" agora reflete o acumulado do ano
+        "yield_value": point["yield_value"],
+        "yield_pct": ytd,
         "reference_date": target_date.isoformat(),
         "accounts": accounts_summary,
     }
@@ -360,47 +449,9 @@ def get_portfolio_overview(
 # ============================================================
 
 def get_history(db: Session, account_id: Optional[int] = None, cache: Optional[_SnapshotCache] = None) -> List[Dict[str, Any]]:
-    """Série temporal de patrimônio total (consolidado entre contas)."""
+    """Série mensal consolidada (patrimônio, aportado, aporte e rendimento)."""
     cache = cache or _SnapshotCache(db, account_id)
-
-    series = []
-    prev_date: Optional[date] = None
-    for d in cache.distinct_dates:
-        total = cache.sum_total_at_or_before(d)
-        invested = cache.sum_invested_at_or_before(d)
-        change_pct = None
-        month_rendimento = Decimal("0")
-        month_aporte = Decimal("0")
-        prev_total_comp = Decimal("0")
-        if prev_date:
-            for acc_id, snaps in cache._snaps_by_account.items():
-                curr_snap = None
-                prev_snap = None
-                for s in snaps:
-                    if s.snapshot_date <= d:
-                        curr_snap = s
-                    if s.snapshot_date <= prev_date:
-                        prev_snap = s
-                if not curr_snap:
-                    continue
-                if prev_snap:
-                    prev_total_comp += prev_snap.total_value or Decimal("0")
-                rendimento, aporte = _compute_yield_and_contribution(curr_snap, prev_snap, cache.positions_by_snapshot)
-                month_rendimento += rendimento
-                month_aporte += aporte
-            if prev_total_comp > 0:
-                change_pct = float(_safe_div(month_rendimento, prev_total_comp) * 100)
-        series.append({
-            "date": d.isoformat(),
-            "total_value": float(total),
-            "total_invested": float(invested),
-            "yield_value": float(total - invested) if invested else float(total),
-            "monthly_change_pct": change_pct,
-            "monthly_yield_value": float(month_rendimento),
-            "monthly_contribution": float(month_aporte),
-        })
-        prev_date = d
-    return series
+    return get_investment_series(db, cache)
 
 
 # ============================================================
@@ -609,20 +660,15 @@ def get_monthly_contributions(
     Aceita `history` já calculado para evitar recomputar a série (custoso).
     """
     series = history if history is not None else get_history(db, account_id, cache=cache)
-    out = []
-    prev_invested = None
-    for s in series:
-        invested = s["total_invested"]
-        contribution = None
-        if prev_invested is not None:
-            contribution = invested - prev_invested
-        out.append({
+    # (8) Aportes mensais = item 2 (|Aplicação| − |Resgate|) por mês
+    return [
+        {
             "date": s["date"],
-            "total_invested": invested,
-            "contribution": contribution,
-        })
-        prev_invested = invested
-    return out
+            "total_invested": s["total_invested"],
+            "contribution": s.get("aporte"),
+        }
+        for s in series
+    ]
 
 
 # ============================================================
