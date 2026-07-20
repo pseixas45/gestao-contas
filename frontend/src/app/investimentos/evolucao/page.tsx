@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { ArrowLeft, Download, ChevronDown, ChevronRight } from 'lucide-react';
 import MainLayout from '@/components/layout/MainLayout';
+import InvestmentNav from '@/components/investments/InvestmentNav';
 import { investmentsApi, PositionEvolutionAsset } from '@/lib/api';
 
 // Intervalo padrão: início do ano atual até o mês anterior ao atual
@@ -150,6 +151,7 @@ export default function EvolucaoPage() {
   return (
     <MainLayout>
     <div className="space-y-4">
+      <InvestmentNav className="mb-1" />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

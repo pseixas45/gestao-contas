@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import MainLayout from '@/components/layout/MainLayout';
+import InvestmentNav from '@/components/investments/InvestmentNav';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { investmentsApi, type InvestmentGoal } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
@@ -78,6 +79,8 @@ export default function MetasPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        <InvestmentNav className="mb-1" />
+
         <div className="flex items-center gap-3">
           <Link href="/investimentos" className="p-2 rounded-lg hover:bg-slate-100">
             <ArrowLeft className="h-4 w-4 text-slate-500" />

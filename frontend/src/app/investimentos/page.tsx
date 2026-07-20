@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import MainLayout from '@/components/layout/MainLayout';
+import InvestmentNav from '@/components/investments/InvestmentNav';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import StatCard from '@/components/ui/StatCard';
 import { SkeletonCard } from '@/components/ui/Skeleton';
@@ -137,6 +138,7 @@ export default function InvestimentosDashboardPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        <InvestmentNav className="mb-1" />
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -156,12 +158,6 @@ export default function InvestimentosDashboardPage() {
                 <option key={m} value={m}>{formatMonthYear(m + '-01')}</option>
               ))}
             </select>
-            <Link href="/investimentos/posicoes" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Posições</Link>
-            <Link href="/investimentos/historico" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Histórico</Link>
-            <Link href="/investimentos/metas" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Metas</Link>
-            <Link href="/investimentos/ativos" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Ativos</Link>
-            <Link href="/investimentos/evolucao" className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 font-medium text-slate-700">Evolucao</Link>
-            <Link href="/investimentos/importar" className="text-xs px-3 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium">Importar</Link>
           </div>
         </div>
 
