@@ -1,7 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import { LucideIcon } from 'lucide-react';
+import { LucideIcon, Info } from 'lucide-react';
 
 interface StatCardProps {
   title: string;
@@ -10,6 +10,7 @@ interface StatCardProps {
   icon?: LucideIcon;
   trend?: { value: number; label: string };
   color?: 'primary' | 'emerald' | 'rose' | 'amber' | 'sky' | 'violet';
+  info?: string;   // fórmula/explicação exibida em tooltip ao passar o mouse no ícone
   className?: string;
 }
 
@@ -46,16 +47,30 @@ const colorMap = {
   },
 };
 
-export default function StatCard({ title, value, subtitle, icon: Icon, trend, color = 'primary', className }: StatCardProps) {
+export default function StatCard({ title, value, subtitle, icon: Icon, trend, color = 'primary', info, className }: StatCardProps) {
   const colors = colorMap[color];
 
   return (
     <div className={cn(
-      'bg-white rounded-2xl shadow-card border border-slate-100/80 p-5 animate-fade-in',
+      'relative bg-white rounded-2xl shadow-card border border-slate-100/80 p-5 animate-fade-in hover:z-30',
       className
     )}>
       <div className="flex items-start justify-between mb-3">
-        <p className="text-sm font-medium text-slate-500">{title}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-medium text-slate-500">{title}</p>
+          {info && (
+            <span className="relative group/info inline-flex">
+              <Info className="h-3.5 w-3.5 text-slate-300 hover:text-slate-500 cursor-help" aria-label="Fórmula" />
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-1/2 top-6 z-40 hidden w-60 -translate-x-1/2 rounded-lg bg-slate-800 px-3 py-2 text-xs font-normal leading-snug text-white shadow-lg group-hover/info:block"
+              >
+                {info}
+                <span className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-slate-800" />
+              </span>
+            </span>
+          )}
+        </div>
         {Icon && (
           <div className={cn('p-2 rounded-xl', colors.bg)}>
             <Icon className={cn('h-4 w-4', colors.icon)} />

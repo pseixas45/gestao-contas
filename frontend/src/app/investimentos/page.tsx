@@ -190,6 +190,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle={`${overview.accounts.length} conta${overview.accounts.length !== 1 ? 's' : ''}`}
                 icon={Wallet}
                 color="primary"
+                info="Soma do patrimônio das contas de investimento (Carteiras XP, Itaú e C6 + XP Global) no mês selecionado."
               />
               <StatCard
                 title="Variação no Mês"
@@ -197,6 +198,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle="Patrimônio vs mês anterior"
                 icon={overview.monthly_change != null && overview.monthly_change >= 0 ? ArrowUpRight : ArrowDownRight}
                 color={overview.monthly_change != null && overview.monthly_change >= 0 ? 'emerald' : 'rose'}
+                info="Patrimônio do mês − patrimônio do mês anterior."
               />
               <StatCard
                 title="Aporte do Mês"
@@ -204,6 +206,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle="Aplicações − resgates"
                 icon={PiggyBank}
                 color="sky"
+                info="Aplicações − resgates do mês (em módulo). Negativo = mais resgates que aplicações."
               />
               <StatCard
                 title="Rendimento do Mês"
@@ -211,6 +214,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle={overview.monthly_yield_pct != null ? `${overview.monthly_yield_pct >= 0 ? '+' : ''}${overview.monthly_yield_pct.toFixed(2)}%` : '—'}
                 icon={TrendingUp}
                 color={overview.monthly_yield_value != null && overview.monthly_yield_value >= 0 ? 'emerald' : 'rose'}
+                info="Variação − Aporte + (Rendimento − Juros). Percentual = Rendimento ÷ patrimônio do mês anterior."
               />
               <StatCard
                 title="Rentabilidade no Ano"
@@ -218,6 +222,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle="Acumulada (YTD)"
                 icon={LineChartIcon}
                 color={overview.ytd_yield_pct != null && overview.ytd_yield_pct >= 0 ? 'emerald' : 'rose'}
+                info="Rentabilidades mensais encadeadas: Π(1 + rₘ) − 1, de janeiro até o mês selecionado (time-weighted)."
               />
             </div>
 
@@ -230,6 +235,7 @@ export default function InvestimentosDashboardPage() {
                   subtitle={`IR estimado: ${formatCurrency(netValueData.total_ir)}`}
                   icon={Shield}
                   color="sky"
+                  info="Patrimônio − IR/IOF estimado sobre o ganho de cada posição (tabela regressiva 22,5%→15%, com isenções: LCA/LCI/CRA/CRI/debênture incentivada/FII)."
                 />
               </div>
             )}
