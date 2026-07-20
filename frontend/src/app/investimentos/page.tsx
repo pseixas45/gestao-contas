@@ -214,7 +214,7 @@ export default function InvestimentosDashboardPage() {
                 subtitle={overview.monthly_yield_pct != null ? `${overview.monthly_yield_pct >= 0 ? '+' : ''}${overview.monthly_yield_pct.toFixed(2)}%` : '—'}
                 icon={TrendingUp}
                 color={overview.monthly_yield_value != null && overview.monthly_yield_value >= 0 ? 'emerald' : 'rose'}
-                info="Variação − Aporte + (categoria Rendimento) − |categoria Juros|. Percentual = Rendimento ÷ patrimônio do mês anterior."
+                info="Variação − Aporte + (categoria Rendimento) − |categoria Juros|. % = Rendimento ÷ patrimônio no fechamento do mês anterior (que já inclui os aportes daquele mês)."
               />
               <StatCard
                 title="Rentabilidade no Ano"
