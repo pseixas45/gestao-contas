@@ -62,10 +62,16 @@ function formatMonthYear(iso: string): string {
 
 export default function InvestimentosDashboardPage() {
   const [selectedMonth, setSelectedMonth] = useState<string>('');
+  const [selectedBank, setSelectedBank] = useState<string>('');
+
+  const { data: banks = [] } = useQuery({
+    queryKey: ['investment-banks'],
+    queryFn: () => investmentsApi.investmentBanks(),
+  });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['investments-dashboard', selectedMonth],
-    queryFn: () => investmentsApi.dashboard(undefined, selectedMonth || undefined),
+    queryKey: ['investments-dashboard', selectedMonth, selectedBank],
+    queryFn: () => investmentsApi.dashboard(undefined, selectedMonth || undefined, selectedBank ? parseInt(selectedBank) : undefined),
   });
 
   const { data: goalsProgress } = useQuery({
@@ -148,6 +154,16 @@ export default function InvestimentosDashboardPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedBank}
+              onChange={(e) => setSelectedBank(e.target.value)}
+              className="text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 font-medium text-slate-700"
+            >
+              <option value="">Todos os bancos</option>
+              {banks.map((b) => (
+                <option key={b.bank_id} value={b.bank_id}>{b.bank}</option>
+              ))}
+            </select>
             <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}

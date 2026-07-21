@@ -190,6 +190,7 @@ export default function RentabilidadePage() {
   const [tab, setTab] = useState<'rentab' | 'ajustar'>('rentab');
   const [refYm, setRefYm] = useState<string>('');
   const [classFilter, setClassFilter] = useState('');
+  const [bankFilter, setBankFilter] = useState('');
   const { data, isLoading } = useQuery({
     queryKey: ['asset-yield'],
     queryFn: () => investmentsApi.assetYield(),
@@ -204,15 +205,16 @@ export default function RentabilidadePage() {
     [data],
   );
 
-  // ativos com métricas no mês selecionado, filtrados por classe
+  // ativos com métricas no mês selecionado, filtrados por banco e classe
   const rows = useMemo(() => {
     if (!data) return [];
     return data.assets
+      .filter((a) => !bankFilter || a.bank === bankFilter)
       .filter((a) => !classFilter || a.asset_class === classFilter)
       .map((a) => ({ a, metrics: computeMetrics(a, effectiveYm) }))
       .filter((r): r is { a: AssetYieldSeries; metrics: Metrics } => r.metrics !== null)
       .sort((x, y) => y.metrics.value - x.metrics.value);
-  }, [data, effectiveYm, classFilter]);
+  }, [data, effectiveYm, classFilter, bankFilter]);
 
   const alertMonths = (data?.reconciliation || []).filter((r) => r.unlinked_flow > 1000);
 
@@ -227,7 +229,7 @@ export default function RentabilidadePage() {
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Rentabilidade por Ativo</h1>
-            <p className="text-slate-500 text-sm">Marcação a mercado + cupons pagos, mês a mês e acumulado (carteira XP)</p>
+            <p className="text-slate-500 text-sm">Marcação a mercado + cupons pagos, mês a mês e acumulado (todas as carteiras)</p>
           </div>
         </div>
 
@@ -256,6 +258,19 @@ export default function RentabilidadePage() {
                 >
                   {[...months].reverse().map((m) => (
                     <option key={m} value={m}>{fmtMonth(m)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mr-1">Banco</label>
+                <select
+                  value={bankFilter}
+                  onChange={(e) => setBankFilter(e.target.value)}
+                  className="px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-white"
+                >
+                  <option value="">Todos</option>
+                  {(data?.banks || []).map((b) => (
+                    <option key={b.bank_id} value={b.bank}>{b.bank}</option>
                   ))}
                 </select>
               </div>

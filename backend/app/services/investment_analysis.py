@@ -149,14 +149,17 @@ def _compute_yield_and_contribution(
 class _SnapshotCache:
     """Carrega snapshots e posições uma única vez e expõe consultas em memória."""
 
-    def __init__(self, db: Session, account_id: Optional[int] = None):
+    def __init__(self, db: Session, account_id: Optional[int] = None,
+                 account_ids: Optional[List[int]] = None):
         self.db = db
         self.account_id = account_id
 
         # Contas
-        accs_q = db.query(BankAccount).filter(BankAccount.is_active == True)
+        accs_q = db.query(BankAccount).filter(BankAccount.is_active == True)  # noqa: E712
         if account_id:
             accs_q = accs_q.filter(BankAccount.id == account_id)
+        elif account_ids is not None:
+            accs_q = accs_q.filter(BankAccount.id.in_(account_ids or [-1]))
         else:
             accs_q = accs_q.filter(BankAccount.account_type == "INVESTMENT")
         self.accounts: List[BankAccount] = accs_q.all()
@@ -717,31 +720,52 @@ def _asset_flows_by_month(db: Session) -> Dict[int, Dict[str, Dict[str, Decimal]
 
 
 def get_asset_yield_series(
-    db: Session, carteira_account_id: int = 11,
+    db: Session, carteira_account_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Rentabilidade por ativo, mês a mês e acumulada.
 
-    Para cada ativo da carteira (snapshots da conta `carteira_account_id`):
+    Cobre TODAS as carteiras de investimento por padrão (XP/Itaú/C6...); se
+    `carteira_account_id` for informado, restringe a essa conta.
+
+    Para cada ativo:
       valor(m)        = marcação a mercado no fim do mês m (soma de posições do ativo)
-      aporte(m)       = |Aplicação| − Resgate_líquido do ativo no mês (dinheiro novo)
-      cupom(m)        = Σ Rendimento pago em caixa do ativo no mês
+      aporte(m)       = fluxo vinculado (|Aplicação| − Resgate_líquido) quando o
+                        ativo tem lançamentos com asset_id (XP); senão, Δvalue_invested
+                        da posição (Itaú, quando disponível); senão 0 (só marcação).
+      cupom(m)        = Σ Rendimento pago em caixa do ativo no mês (só XP vinculado)
       rendimento(m)   = (valor(m) − valor(m−1)) − aporte(m) + cupom(m)
-      rentab(m) %     = rendimento(m) / base, base = valor(m−1) ou aporte(m) se novo
+      rentab(m) %     = rendimento(m) / base, base = valor(m−1) ou custo se novo
       acumulada %     = Π(1 + rentab(m)) − 1  (encadeada)
 
-    Reconciliação: Σ rendimento(ativos) por mês deve aproximar o rendimento da
-    carteira (variação − aporte + cupons).
+    Nota: Itaú/C6 não têm aporte/cupom vinculados por ativo; a rentabilidade
+    deles sai da marcação a mercado (ok p/ fundos que reinvestem).
     """
-    # Snapshots da carteira (ordenados) + posições
+    # Contas de carteira (investment) + mapa de banco
+    acc_q = db.query(BankAccount).filter(
+        BankAccount.account_type == "INVESTMENT", BankAccount.is_active == True)  # noqa: E712
+    if carteira_account_id:
+        acc_q = acc_q.filter(BankAccount.id == carteira_account_id)
+    accounts = acc_q.all()
+    if not accounts:
+        return {"assets": [], "months": [], "reconciliation": [], "banks": []}
+    acc_ids = [a.id for a in accounts]
+    banks_by_id = {b.id: b for b in db.query(Bank).all()}
+    acc_bank = {
+        a.id: (a.bank_id, banks_by_id[a.bank_id].name if a.bank_id in banks_by_id else a.name)
+        for a in accounts
+    }
+
+    # Snapshots das carteiras (ordenados) + posições
     snaps = (
         db.query(InvestmentSnapshot)
-        .filter(InvestmentSnapshot.account_id == carteira_account_id)
+        .filter(InvestmentSnapshot.account_id.in_(acc_ids))
         .order_by(InvestmentSnapshot.snapshot_date)
         .all()
     )
     if not snaps:
-        return {"assets": [], "months": [], "reconciliation": []}
+        return {"assets": [], "months": [], "reconciliation": [], "banks": []}
 
+    snap_acc = {s.id: s.account_id for s in snaps}
     snap_ids = [s.id for s in snaps]
     positions = (
         db.query(InvestmentPosition)
@@ -755,18 +779,24 @@ def get_asset_yield_series(
     months = sorted({ym for ym in ym_of_snap.values()})
     asset_meta: Dict[int, Dict[str, Any]] = {}
     value_by_asset_ym: Dict[int, Dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0")))
+    vinv_by_asset_ym: Dict[int, Dict[str, Decimal]] = defaultdict(dict)  # value_invested por (asset, ym)
     for p in positions:
         aid = p.asset_id
         ym = ym_of_snap[p.snapshot_id]
         value_by_asset_ym[aid][ym] += p.value or Decimal("0")
+        if p.value_invested is not None:
+            vinv_by_asset_ym[aid][ym] = vinv_by_asset_ym[aid].get(ym, Decimal("0")) + p.value_invested
         if aid not in asset_meta and p.asset:
             ac = p.asset.asset_class
+            bank_id, bank_name = acc_bank.get(snap_acc[p.snapshot_id], (None, None))
             asset_meta[aid] = {
                 "asset_id": aid,
                 "asset_name": p.asset.name,
                 "ticker": p.asset.ticker,
                 "asset_class": ac.name if ac else None,
                 "color": ac.color if ac else "#6B7280",
+                "bank_id": bank_id,
+                "bank": bank_name,
             }
 
     flows = _asset_flows_by_month(db)
@@ -779,6 +809,7 @@ def get_asset_yield_series(
                     "asset_id": aid, "asset_name": a.name, "ticker": a.ticker,
                     "asset_class": a.asset_class.name if a.asset_class else None,
                     "color": a.asset_class.color if a.asset_class else "#6B7280",
+                    "bank_id": None, "bank": None,
                 }
 
     # Reconciliação mensal (soma dos ativos)
@@ -789,35 +820,54 @@ def get_asset_yield_series(
     for aid, meta in asset_meta.items():
         vseries = value_by_asset_ym.get(aid, {})
         fseries = flows.get(aid, {})
+        vinvseries = vinv_by_asset_ym.get(aid, {})
+        has_flows = aid in flows          # XP: fluxos vinculados são a fonte
         month_rows: List[Dict[str, Any]] = []
         prev_val: Optional[Decimal] = None
+        prev_vinv: Optional[Decimal] = None
         accum = Decimal("1")
         total_yield = Decimal("0")
         for ym in months:
             val = vseries.get(ym)
-            f = fseries.get(ym)
-            aplic = f["aplic_abs"] if f else Decimal("0")
-            resg = f["resg_net"] if f else Decimal("0")
-            cupom = f["cupom"] if f else Decimal("0")
-            aporte = aplic - resg
+            if has_flows:
+                f = fseries.get(ym)
+                aplic = f["aplic_abs"] if f else Decimal("0")
+                resg = f["resg_net"] if f else Decimal("0")
+                cupom = f["cupom"] if f else Decimal("0")
+                aporte = aplic - resg
+            else:
+                # Sem fluxo vinculado (Itaú/C6): aporte = Δvalue_invested se houver.
+                f = None
+                cupom = Decimal("0")
+                cur_vinv = vinvseries.get(ym)
+                if cur_vinv is not None and prev_vinv is not None:
+                    aporte = cur_vinv - prev_vinv
+                else:
+                    aporte = Decimal("0")
+                if cur_vinv is not None:
+                    prev_vinv = cur_vinv
             # valor corrente: se não há posição no mês mas houve antes, usa 0
             # (ativo resgatado); se nunca houve, pula até aparecer.
-            if val is None and prev_val is None and not f:
+            if val is None and prev_val is None and not f and aporte == 0:
                 continue
             cur_val = val if val is not None else Decimal("0")
+            # Posição sumiu (valor 0) sem resgate vinculado explicando a saída:
+            # assume capital devolvido (resgate/vencimento), não perda de −100%.
+            if cur_val == 0 and prev_val and prev_val > 0 and aporte == 0:
+                aporte = -prev_val
             if prev_val is None:
                 if ym == base_month:
                     # 1º snapshot da série: baseline, sem base de custo anterior
                     base = Decimal("0")
                     rendimento = Decimal("0")
                 else:
-                    # Ativo novo (1ª aparição mid-série): o valor que surge é
-                    # CUSTO/aporte, não rendimento. Se o aporte foi vinculado,
-                    # usa-o como base de custo; senão, usa o próprio valor (evita
-                    # contar a compra inteira como ~100% de rendimento).
-                    cost = aporte if aporte > 0 else cur_val
-                    base = cost
-                    rendimento = (cur_val - cost) + cupom
+                    # Ativo novo (1ª aparição mid-série): o mês de entrada é
+                    # baseline — não medimos valorização (não sabemos o preço
+                    # exato de entrada dentro do mês), só o cupom. Evita tanto
+                    # contar a compra como ~100% de rendimento quanto artefatos
+                    # de lote (aporte num lote, valor no outro).
+                    base = aporte if aporte > 0 else cur_val
+                    rendimento = cupom
             else:
                 base = prev_val if prev_val > 0 else (aporte if aporte > 0 else Decimal("0"))
                 rendimento = (cur_val - prev_val) - aporte + cupom
@@ -872,7 +922,21 @@ def get_asset_yield_series(
         }
         for ym in months
     ]
-    return {"assets": assets_out, "months": months, "reconciliation": reconciliation}
+
+    # Bancos presentes (para o filtro no front)
+    banks_present: List[Dict[str, Any]] = []
+    seen_banks = set()
+    for a in assets_out:
+        bid = a.get("bank_id")
+        if bid is not None and bid not in seen_banks:
+            seen_banks.add(bid)
+            banks_present.append({"bank_id": bid, "bank": a.get("bank")})
+    banks_present.sort(key=lambda b: b["bank"] or "")
+
+    return {
+        "assets": assets_out, "months": months,
+        "reconciliation": reconciliation, "banks": banks_present,
+    }
 
 
 def evaluate_goal_progress(

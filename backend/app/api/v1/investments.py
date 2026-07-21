@@ -547,9 +547,28 @@ def goals_progress(
 # ANÁLISES (dashboard, alocação, exposição, etc.)
 # ===========================================================
 
+@router.get("/banks")
+def list_investment_banks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Bancos que possuem contas de investimento (para o filtro do dashboard)."""
+    rows = (
+        db.query(Bank.id, Bank.name)
+        .join(BankAccount, BankAccount.bank_id == Bank.id)
+        .filter(BankAccount.account_type == "INVESTMENT", BankAccount.is_active == True)  # noqa: E712
+        .distinct()
+        .all()
+    )
+    items = [{"bank_id": bid, "bank": name} for bid, name in rows]
+    items.sort(key=lambda x: x["bank"] or "")
+    return items
+
+
 @router.get("/dashboard")
 def get_dashboard(
     account_id: Optional[int] = None,
+    bank_id: Optional[int] = None,
     month: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
@@ -558,6 +577,7 @@ def get_dashboard(
 
     Params:
         month: filtro YYYY-MM (ex: 2026-03). Se informado, overview usa o último dia desse mês.
+        bank_id: filtra as contas de investimento desse banco.
     """
     # Determinar reference_date a partir do filtro de mês
     import calendar
@@ -571,7 +591,18 @@ def get_dashboard(
         except (ValueError, IndexError):
             pass
 
-    cache = analysis._SnapshotCache(db, account_id)
+    # Filtro por banco -> contas de investimento desse banco
+    account_ids = None
+    if bank_id and not account_id:
+        account_ids = [
+            a.id for a in db.query(BankAccount.id)
+            .filter(BankAccount.bank_id == bank_id,
+                    BankAccount.account_type == "INVESTMENT",
+                    BankAccount.is_active == True)  # noqa: E712
+            .all()
+        ]
+
+    cache = analysis._SnapshotCache(db, account_id, account_ids=account_ids)
     history = analysis.get_history(db, account_id, cache=cache)
 
     # (7) Rendimento mensal = item 3 por mês (já calculado na série)
@@ -649,11 +680,12 @@ def history_endpoint(
 
 @router.get("/asset-yield")
 def asset_yield_endpoint(
-    carteira_account_id: int = 11,
+    carteira_account_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Rentabilidade por ativo (mês a mês + acumulada) da carteira informada."""
+    """Rentabilidade por ativo (mês a mês + acumulada). Todas as carteiras por
+    padrão; filtra uma conta se `carteira_account_id` for informado."""
     return analysis.get_asset_yield_series(db, carteira_account_id)
 
 

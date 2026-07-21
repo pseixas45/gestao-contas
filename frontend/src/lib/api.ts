@@ -931,6 +931,8 @@ export interface AssetYieldSeries {
   ticker: string | null;
   asset_class: string | null;
   color: string | null;
+  bank_id: number | null;
+  bank: string | null;
   current_value: number;
   yield_total_value: number;
   yield_accum_pct: number;
@@ -941,6 +943,7 @@ export interface AssetYieldData {
   assets: AssetYieldSeries[];
   months: string[];
   reconciliation: Array<{ date: string; sum_assets_yield: number; unlinked_flow: number }>;
+  banks: Array<{ bank_id: number; bank: string }>;
 }
 
 export interface UnmatchedLink {
@@ -1030,11 +1033,17 @@ export const investmentsApi = {
   },
 
   // Analyses
-  dashboard: async (accountId?: number, month?: string): Promise<InvestmentDashboard> => {
+  dashboard: async (accountId?: number, month?: string, bankId?: number): Promise<InvestmentDashboard> => {
     const params: Record<string, any> = {};
     if (accountId) params.account_id = accountId;
     if (month) params.month = month;
+    if (bankId) params.bank_id = bankId;
     const response = await api.get('/investments/dashboard', { params });
+    return response.data;
+  },
+
+  investmentBanks: async (): Promise<Array<{ bank_id: number; bank: string }>> => {
+    const response = await api.get('/investments/banks');
     return response.data;
   },
 
@@ -1078,9 +1087,11 @@ export const investmentsApi = {
     return response.data;
   },
 
-  // Rentabilidade por ativo
-  assetYield: async (carteiraAccountId = 11): Promise<AssetYieldData> => {
-    const response = await api.get('/investments/asset-yield', { params: { carteira_account_id: carteiraAccountId } });
+  // Rentabilidade por ativo (todas as carteiras por padrão)
+  assetYield: async (carteiraAccountId?: number): Promise<AssetYieldData> => {
+    const response = await api.get('/investments/asset-yield', {
+      params: carteiraAccountId ? { carteira_account_id: carteiraAccountId } : {},
+    });
     return response.data;
   },
 
