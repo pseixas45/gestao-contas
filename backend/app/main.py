@@ -137,8 +137,12 @@ async def startup_event():
                 db.add(ac)
             db.commit()
 
-        # Migração: adicionar colunas novas
-        _run_migrations(db)
+        # Migração: adicionar colunas novas (nunca deve derrubar o startup)
+        try:
+            _run_migrations(db)
+        except Exception as e:
+            logging.getLogger("migrations").warning(f"_run_migrations falhou (ignorado): {e}")
+            db.rollback()
 
         # Atualizar cotações de câmbio
         await _update_exchange_rates(db)
@@ -165,6 +169,17 @@ def _run_migrations(db):
         db.commit()
         logger.info("Migração concluída.")
 
+    def _safe_alter(sql: str, descr: str):
+        """Executa um ALTER isolado; se falhar (ex.: coluna já existe em outro
+        schema / search_path divergente), faz rollback e segue — nunca derruba
+        o startup."""
+        try:
+            db.execute(text(sql))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Migração ignorada ({descr}): {e}")
+
     # Migração: novos campos em assets
     if "assets" in inspector.get_table_names():
         asset_cols = [col["name"] for col in inspector.get_columns("assets")]
@@ -178,18 +193,17 @@ def _run_migrations(db):
         ]:
             if col_name not in asset_cols:
                 logger.info(f"Migrando assets: adicionando {col_name}...")
-                db.execute(text(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type}"))
-        db.commit()
+                _safe_alter(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type}", f"assets.{col_name}")
 
     # Migração: asset_id em transactions (vínculo lançamento -> ativo)
     if "transactions" in inspector.get_table_names():
         txn_cols = [col["name"] for col in inspector.get_columns("transactions")]
         if "asset_id" not in txn_cols:
             logger.info("Migrando transactions: adicionando asset_id...")
-            db.execute(text(
-                "ALTER TABLE transactions ADD COLUMN asset_id INTEGER REFERENCES assets(id)"
-            ))
-            db.commit()
+            _safe_alter(
+                "ALTER TABLE transactions ADD COLUMN asset_id INTEGER REFERENCES assets(id)",
+                "transactions.asset_id",
+            )
 
     # Migração: novos campos em investment_snapshots
     if "investment_snapshots" in inspector.get_table_names():
