@@ -647,6 +647,106 @@ def history_endpoint(
     return analysis.get_history(db, account_id)
 
 
+@router.get("/asset-yield")
+def asset_yield_endpoint(
+    carteira_account_id: int = 11,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Rentabilidade por ativo (mês a mês + acumulada) da carteira informada."""
+    return analysis.get_asset_yield_series(db, carteira_account_id)
+
+
+def _build_xp_matcher(db: Session, carteira_account_id: int = 11):
+    """Constrói o AssetMatcher sobre os ativos da carteira XP."""
+    from app.services.asset_matcher import AssetMatcher
+    rows = (
+        db.query(Asset.id, Asset.name)
+        .join(InvestmentPosition, InvestmentPosition.asset_id == Asset.id)
+        .join(InvestmentSnapshot, InvestmentSnapshot.id == InvestmentPosition.snapshot_id)
+        .filter(InvestmentSnapshot.account_id == carteira_account_id)
+        .distinct()
+        .all()
+    )
+    return AssetMatcher([(aid, name) for aid, name in rows])
+
+
+@router.get("/asset-links/unmatched")
+def unmatched_asset_links(
+    account_id: int = 9,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Lançamentos (Aplic/Rend/Resg) sem asset_id, com sugestão de ativo p/ revisão."""
+    from app.models import Transaction
+    matcher = _build_xp_matcher(db)
+    txns = (
+        db.query(Transaction)
+        .filter(Transaction.account_id == account_id, Transaction.asset_id.is_(None),
+                Transaction.category_id.in_([1, 21, 22]))
+        .order_by(Transaction.date.desc())
+        .all()
+    )
+    CAT_NAMES = {1: "Aplicação", 21: "Rendimento", 22: "Resgate"}
+    out = []
+    for t in txns:
+        r = matcher.match(t.description)
+        out.append({
+            "transaction_id": t.id,
+            "date": t.date.isoformat(),
+            "description": t.description,
+            "amount": float(t.amount_brl or 0),
+            "category_id": t.category_id,
+            "category_name": CAT_NAMES.get(t.category_id),
+            "suggestion": None if r.confidence in ("none", "ambiguous") else {
+                "asset_id": r.asset_id, "asset_name": r.asset_name,
+                "confidence": r.confidence, "method": r.method,
+            },
+            "ambiguous_candidates": r.candidates or [],
+        })
+    return {"count": len(out), "items": out}
+
+
+@router.get("/asset-links/assets")
+def asset_link_options(
+    carteira_account_id: int = 11,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Lista de ativos da carteira para o dropdown de vínculo manual."""
+    rows = (
+        db.query(Asset.id, Asset.name, Asset.ticker)
+        .join(InvestmentPosition, InvestmentPosition.asset_id == Asset.id)
+        .join(InvestmentSnapshot, InvestmentSnapshot.id == InvestmentPosition.snapshot_id)
+        .filter(InvestmentSnapshot.account_id == carteira_account_id)
+        .distinct()
+        .all()
+    )
+    items = [{"asset_id": aid, "name": name, "ticker": tk} for aid, name, tk in rows]
+    items.sort(key=lambda x: x["name"])
+    return items
+
+
+@router.put("/transactions/{transaction_id}/asset")
+def set_transaction_asset(
+    transaction_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Define (ou limpa, com asset_id=null) o ativo vinculado a um lançamento."""
+    from app.models import Transaction
+    t = db.get(Transaction, transaction_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado")
+    asset_id = payload.get("asset_id")
+    if asset_id is not None and not db.get(Asset, asset_id):
+        raise HTTPException(status_code=400, detail="Ativo inexistente")
+    t.asset_id = asset_id
+    db.commit()
+    return {"transaction_id": t.id, "asset_id": t.asset_id}
+
+
 @router.get("/allocation")
 def allocation_endpoint(
     group_by: str = "class",

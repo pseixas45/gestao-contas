@@ -680,6 +680,196 @@ def get_monthly_contributions(
 # Progresso de metas
 # ============================================================
 
+# ============================================================
+# Rentabilidade por ATIVO (mês a mês + acumulado)
+# ============================================================
+# Fluxos por ativo vêm das transações que foram vinculadas (asset_id) na conta
+# corrente da corretora. Categorias:
+#   Aplicação(1)  -> dinheiro que entrou no ativo (negativo no extrato)
+#   Resgate(22)   -> dinheiro que saiu do ativo  (positivo; taxas negativas reduzem)
+#   Rendimento(21)-> cupom/amortização/provento pago em caixa (positivo)
+
+
+def _asset_flows_by_month(db: Session) -> Dict[int, Dict[str, Dict[str, Decimal]]]:
+    """{asset_id: {ym: {aplic_abs, resg_net, cupom}}} a partir de transactions.asset_id."""
+    from app.models import Transaction
+    out: Dict[int, Dict[str, Dict[str, Decimal]]] = defaultdict(
+        lambda: defaultdict(lambda: {
+            "aplic_abs": Decimal("0"), "resg_net": Decimal("0"), "cupom": Decimal("0")})
+    )
+    rows = (
+        db.query(Transaction.asset_id, Transaction.date,
+                 Transaction.category_id, Transaction.amount_brl)
+        .filter(Transaction.asset_id.isnot(None),
+                Transaction.category_id.in_([CAT_APLICACAO, CAT_RENDIMENTO, CAT_RESGATE]))
+        .all()
+    )
+    for aid, d, cat, amt in rows:
+        amt = amt or Decimal("0")
+        f = out[aid][d.strftime("%Y-%m")]
+        if cat == CAT_APLICACAO:
+            f["aplic_abs"] += abs(amt)
+        elif cat == CAT_RESGATE:
+            f["resg_net"] += amt
+        elif cat == CAT_RENDIMENTO:
+            f["cupom"] += amt
+    return out
+
+
+def get_asset_yield_series(
+    db: Session, carteira_account_id: int = 11,
+) -> Dict[str, Any]:
+    """Rentabilidade por ativo, mês a mês e acumulada.
+
+    Para cada ativo da carteira (snapshots da conta `carteira_account_id`):
+      valor(m)        = marcação a mercado no fim do mês m (soma de posições do ativo)
+      aporte(m)       = |Aplicação| − Resgate_líquido do ativo no mês (dinheiro novo)
+      cupom(m)        = Σ Rendimento pago em caixa do ativo no mês
+      rendimento(m)   = (valor(m) − valor(m−1)) − aporte(m) + cupom(m)
+      rentab(m) %     = rendimento(m) / base, base = valor(m−1) ou aporte(m) se novo
+      acumulada %     = Π(1 + rentab(m)) − 1  (encadeada)
+
+    Reconciliação: Σ rendimento(ativos) por mês deve aproximar o rendimento da
+    carteira (variação − aporte + cupons).
+    """
+    # Snapshots da carteira (ordenados) + posições
+    snaps = (
+        db.query(InvestmentSnapshot)
+        .filter(InvestmentSnapshot.account_id == carteira_account_id)
+        .order_by(InvestmentSnapshot.snapshot_date)
+        .all()
+    )
+    if not snaps:
+        return {"assets": [], "months": [], "reconciliation": []}
+
+    snap_ids = [s.id for s in snaps]
+    positions = (
+        db.query(InvestmentPosition)
+        .options(selectinload(InvestmentPosition.asset).selectinload(Asset.asset_class))
+        .filter(InvestmentPosition.snapshot_id.in_(snap_ids))
+        .all()
+    )
+
+    # valor por (asset_id, ym): soma de posições do ativo no snapshot do mês
+    ym_of_snap = {s.id: s.snapshot_date.strftime("%Y-%m") for s in snaps}
+    months = sorted({ym for ym in ym_of_snap.values()})
+    asset_meta: Dict[int, Dict[str, Any]] = {}
+    value_by_asset_ym: Dict[int, Dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0")))
+    for p in positions:
+        aid = p.asset_id
+        ym = ym_of_snap[p.snapshot_id]
+        value_by_asset_ym[aid][ym] += p.value or Decimal("0")
+        if aid not in asset_meta and p.asset:
+            ac = p.asset.asset_class
+            asset_meta[aid] = {
+                "asset_id": aid,
+                "asset_name": p.asset.name,
+                "ticker": p.asset.ticker,
+                "asset_class": ac.name if ac else None,
+                "color": ac.color if ac else "#6B7280",
+            }
+
+    flows = _asset_flows_by_month(db)
+    # ativos sem posição mas com fluxo (ex.: resgatados) — incluir também
+    for aid in flows:
+        if aid not in asset_meta:
+            a = db.get(Asset, aid)
+            if a:
+                asset_meta[aid] = {
+                    "asset_id": aid, "asset_name": a.name, "ticker": a.ticker,
+                    "asset_class": a.asset_class.name if a.asset_class else None,
+                    "color": a.asset_class.color if a.asset_class else "#6B7280",
+                }
+
+    # Reconciliação mensal (soma dos ativos)
+    recon_by_ym: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    base_month = months[0] if months else None
+
+    assets_out: List[Dict[str, Any]] = []
+    for aid, meta in asset_meta.items():
+        vseries = value_by_asset_ym.get(aid, {})
+        fseries = flows.get(aid, {})
+        month_rows: List[Dict[str, Any]] = []
+        prev_val: Optional[Decimal] = None
+        accum = Decimal("1")
+        total_yield = Decimal("0")
+        for ym in months:
+            val = vseries.get(ym)
+            f = fseries.get(ym)
+            aplic = f["aplic_abs"] if f else Decimal("0")
+            resg = f["resg_net"] if f else Decimal("0")
+            cupom = f["cupom"] if f else Decimal("0")
+            aporte = aplic - resg
+            # valor corrente: se não há posição no mês mas houve antes, usa 0
+            # (ativo resgatado); se nunca houve, pula até aparecer.
+            if val is None and prev_val is None and not f:
+                continue
+            cur_val = val if val is not None else Decimal("0")
+            if prev_val is None:
+                if ym == base_month:
+                    # 1º snapshot da série: baseline, sem base de custo anterior
+                    base = Decimal("0")
+                    rendimento = Decimal("0")
+                else:
+                    # ativo novo (compra mid-série): prev = 0
+                    base = aporte if aporte > 0 else cur_val
+                    rendimento = (cur_val - aporte) + cupom
+            else:
+                base = prev_val if prev_val > 0 else (aporte if aporte > 0 else Decimal("0"))
+                rendimento = (cur_val - prev_val) - aporte + cupom
+            ratio = float(rendimento / base) if base and base != 0 else 0.0
+            accum *= Decimal(str(1 + ratio))
+            total_yield += rendimento
+            recon_by_ym[ym] += rendimento
+            month_rows.append({
+                "date": ym,
+                "value": float(cur_val),
+                "aporte": float(aporte),
+                "cupom": float(cupom),
+                "yield_value": float(rendimento),
+                "yield_pct": round(ratio * 100, 2),
+            })
+            prev_val = cur_val
+
+        if not month_rows:
+            continue
+        last_val = month_rows[-1]["value"]
+        assets_out.append({
+            **meta,
+            "current_value": last_val,
+            "yield_total_value": float(total_yield),
+            "yield_accum_pct": round(float(accum - 1) * 100, 2),
+            "months": month_rows,
+        })
+
+    assets_out.sort(key=lambda a: -a["current_value"])
+
+    # Reconciliação: rendimento total por ativo por mês + magnitude de fluxos
+    # NÃO atribuídos (asset_id NULL) na conta corrente da corretora. Um mês com
+    # `unlinked_flow` alto sinaliza que a rentabilidade por ativo pode estar
+    # distorcida até esses lançamentos serem vinculados na tela de ajuste.
+    from app.models import Transaction
+    unlinked_ym: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    urows = (
+        db.query(Transaction.date, Transaction.amount_brl)
+        .filter(Transaction.account_id == 9, Transaction.asset_id.is_(None),
+                Transaction.category_id.in_([CAT_APLICACAO, CAT_RENDIMENTO, CAT_RESGATE]))
+        .all()
+    )
+    for d, amt in urows:
+        unlinked_ym[d.strftime("%Y-%m")] += abs(amt or Decimal("0"))
+
+    reconciliation = [
+        {
+            "date": ym,
+            "sum_assets_yield": float(recon_by_ym.get(ym, Decimal("0"))),
+            "unlinked_flow": float(unlinked_ym.get(ym, Decimal("0"))),
+        }
+        for ym in months
+    ]
+    return {"assets": assets_out, "months": months, "reconciliation": reconciliation}
+
+
 def evaluate_goal_progress(
     db: Session, goal: InvestmentGoal,
     cache: Optional[_SnapshotCache] = None,

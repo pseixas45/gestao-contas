@@ -174,11 +174,22 @@ def _run_migrations(db):
             ("rate_type", "VARCHAR(20)"),
             ("application_date", "DATE"),
             ("maturity_date", "DATE"),
+            ("ticker", "VARCHAR(20)"),
         ]:
             if col_name not in asset_cols:
                 logger.info(f"Migrando assets: adicionando {col_name}...")
                 db.execute(text(f"ALTER TABLE assets ADD COLUMN {col_name} {col_type}"))
         db.commit()
+
+    # Migração: asset_id em transactions (vínculo lançamento -> ativo)
+    if "transactions" in inspector.get_table_names():
+        txn_cols = [col["name"] for col in inspector.get_columns("transactions")]
+        if "asset_id" not in txn_cols:
+            logger.info("Migrando transactions: adicionando asset_id...")
+            db.execute(text(
+                "ALTER TABLE transactions ADD COLUMN asset_id INTEGER REFERENCES assets(id)"
+            ))
+            db.commit()
 
     # Migração: novos campos em investment_snapshots
     if "investment_snapshots" in inspector.get_table_names():

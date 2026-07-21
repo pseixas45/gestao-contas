@@ -82,6 +82,7 @@ class Asset(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String(50), index=True)  # Ticker ou código interno
+    ticker = Column(String(20), index=True)  # Ticker B3 (JGPI11, PETR38...) p/ match de lançamentos
     name = Column(String(200), nullable=False)
     name_normalized = Column(String(200), index=True)  # Para matching entre snapshots
     asset_class_id = Column(Integer, ForeignKey("asset_classes.id"), nullable=False)

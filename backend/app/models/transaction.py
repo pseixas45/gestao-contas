@@ -21,6 +21,9 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    # Vínculo opcional a um ativo de investimento (ex.: cupom/aplicação/resgate
+    # de um título específico). Preenchido pelo asset_matcher no import/backfill.
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=True)
     date = Column(Date, nullable=False)  # Data efetiva (ajustada para mês da fatura em cartões)
     description = Column(String(500), nullable=False)
     original_description = Column(String(500))  # Descrição original do extrato
@@ -57,6 +60,7 @@ class Transaction(Base):
     account = relationship("BankAccount", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
     import_batch = relationship("ImportBatch", back_populates="transactions")
+    asset = relationship("Asset")
 
     # Índices compostos para queries frequentes
     __table_args__ = (

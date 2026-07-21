@@ -915,6 +915,50 @@ export interface PositionEvolutionData {
   asset_classes: Array<{ id: number; name: string; color: string | null }>;
 }
 
+export interface AssetYieldMonth {
+  date: string;
+  value: number;
+  aporte: number;
+  cupom: number;
+  yield_value: number;
+  yield_pct: number;
+}
+
+export interface AssetYieldSeries {
+  asset_id: number;
+  asset_name: string;
+  ticker: string | null;
+  asset_class: string | null;
+  color: string | null;
+  current_value: number;
+  yield_total_value: number;
+  yield_accum_pct: number;
+  months: AssetYieldMonth[];
+}
+
+export interface AssetYieldData {
+  assets: AssetYieldSeries[];
+  months: string[];
+  reconciliation: Array<{ date: string; sum_assets_yield: number; unlinked_flow: number }>;
+}
+
+export interface UnmatchedLink {
+  transaction_id: number;
+  date: string;
+  description: string;
+  amount: number;
+  category_id: number;
+  category_name: string | null;
+  suggestion: { asset_id: number; asset_name: string; confidence: string; method: string } | null;
+  ambiguous_candidates: number[];
+}
+
+export interface AssetLinkOption {
+  asset_id: number;
+  name: string;
+  ticker: string | null;
+}
+
 export const investmentsApi = {
   // Asset classes
   listAssetClasses: async (): Promise<AssetClass[]> => {
@@ -1030,6 +1074,27 @@ export const investmentsApi = {
 
   contributionForMonth: async (month: string): Promise<{ month: string; contribution: number | null; total_invested: number | null; snapshot_date: string | null }> => {
     const response = await api.get('/investments/contributions/month', { params: { month } });
+    return response.data;
+  },
+
+  // Rentabilidade por ativo
+  assetYield: async (carteiraAccountId = 11): Promise<AssetYieldData> => {
+    const response = await api.get('/investments/asset-yield', { params: { carteira_account_id: carteiraAccountId } });
+    return response.data;
+  },
+
+  unmatchedAssetLinks: async (accountId = 9): Promise<{ count: number; items: UnmatchedLink[] }> => {
+    const response = await api.get('/investments/asset-links/unmatched', { params: { account_id: accountId } });
+    return response.data;
+  },
+
+  assetLinkOptions: async (carteiraAccountId = 11): Promise<AssetLinkOption[]> => {
+    const response = await api.get('/investments/asset-links/assets', { params: { carteira_account_id: carteiraAccountId } });
+    return response.data;
+  },
+
+  setTransactionAsset: async (transactionId: number, assetId: number | null): Promise<{ transaction_id: number; asset_id: number | null }> => {
+    const response = await api.put(`/investments/transactions/${transactionId}/asset`, { asset_id: assetId });
     return response.data;
   },
 

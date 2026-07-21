@@ -9,6 +9,7 @@ const TABS = [
   { href: '/investimentos/posicoes', label: 'Posições' },
   { href: '/investimentos/historico', label: 'Histórico' },
   { href: '/investimentos/evolucao', label: 'Evolução' },
+  { href: '/investimentos/rentabilidade', label: 'Rentab. Ativo' },
   { href: '/investimentos/metas', label: 'Metas' },
   { href: '/investimentos/ativos', label: 'Ativos' },
   { href: '/investimentos/importar', label: 'Importar' },
