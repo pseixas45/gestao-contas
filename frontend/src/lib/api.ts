@@ -922,6 +922,7 @@ export interface AssetYieldMonth {
   cupom: number;
   yield_value: number;
   yield_pct: number;
+  yield_ratio: number;
 }
 
 export interface AssetYieldSeries {

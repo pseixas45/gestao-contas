@@ -811,9 +811,13 @@ def get_asset_yield_series(
                     base = Decimal("0")
                     rendimento = Decimal("0")
                 else:
-                    # ativo novo (compra mid-série): prev = 0
-                    base = aporte if aporte > 0 else cur_val
-                    rendimento = (cur_val - aporte) + cupom
+                    # Ativo novo (1ª aparição mid-série): o valor que surge é
+                    # CUSTO/aporte, não rendimento. Se o aporte foi vinculado,
+                    # usa-o como base de custo; senão, usa o próprio valor (evita
+                    # contar a compra inteira como ~100% de rendimento).
+                    cost = aporte if aporte > 0 else cur_val
+                    base = cost
+                    rendimento = (cur_val - cost) + cupom
             else:
                 base = prev_val if prev_val > 0 else (aporte if aporte > 0 else Decimal("0"))
                 rendimento = (cur_val - prev_val) - aporte + cupom
@@ -828,6 +832,7 @@ def get_asset_yield_series(
                 "cupom": float(cupom),
                 "yield_value": float(rendimento),
                 "yield_pct": round(ratio * 100, 2),
+                "yield_ratio": ratio,  # sem arredondar (p/ acumular 12m/ano no front)
             })
             prev_val = cur_val
 
