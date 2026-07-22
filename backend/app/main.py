@@ -190,6 +190,7 @@ def _run_migrations(db):
             ("application_date", "DATE"),
             ("maturity_date", "DATE"),
             ("ticker", "VARCHAR(20)"),
+            ("ir_exempt", "BOOLEAN"),
         ]:
             if col_name not in asset_cols:
                 logger.info(f"Migrando assets: adicionando {col_name}...")

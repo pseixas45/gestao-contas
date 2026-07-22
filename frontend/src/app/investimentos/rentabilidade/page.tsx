@@ -23,6 +23,8 @@ interface Metrics {
   lastRs: number;
   lastPct: number;
   acc12Pct: number;
+  acc12NetPct: number;
+  ytdPct: number;
   accTotalPct: number;
   totalRs: number;
 }
@@ -33,12 +35,16 @@ function computeMetrics(asset: AssetYieldSeries, refYm: string): Metrics | null 
   if (idx < 0) return null; // ativo não presente nesse mês
   const rows = asset.months.slice(0, idx + 1);
   const last = asset.months[idx];
+  const year = refYm.slice(0, 4);
   const chain = (arr: typeof rows) => arr.reduce((acc, m) => acc * (1 + m.yield_ratio), 1) - 1;
+  const acc12 = chain(rows.slice(-12));
   return {
     value: last.value,
     lastRs: last.yield_value,
     lastPct: last.yield_pct,
-    acc12Pct: chain(rows.slice(-12)) * 100,
+    acc12Pct: acc12 * 100,
+    acc12NetPct: acc12 * (1 - asset.ir_rate) * 100, // líquida (aprox.: IR sobre o ganho)
+    ytdPct: chain(rows.filter((m) => m.date.slice(0, 4) === year)) * 100,
     accTotalPct: chain(rows) * 100,
     totalRs: rows.reduce((s, m) => s + m.yield_value, 0),
   };
@@ -55,20 +61,28 @@ function AssetRow({ a, refYm, metrics }: { a: AssetYieldSeries; refYm: string; m
           <div className="flex items-center gap-2">
             {open ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronRight className="h-4 w-4 text-slate-400" />}
             <div>
-              <div className="font-medium text-slate-800">{a.asset_name}</div>
-              <div className="text-xs text-slate-400">{[a.ticker, a.asset_class].filter(Boolean).join(' · ')}</div>
+              <div className="font-medium text-slate-800 flex items-center gap-2">
+                {a.asset_name}
+                {a.ir_exempt && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold">isento IR</span>
+                )}
+              </div>
+              <div className="text-xs text-slate-400">
+                {[a.ticker, a.asset_class, a.contracted_rate].filter(Boolean).join(' · ')}
+              </div>
             </div>
           </div>
         </td>
         <td className="px-3 py-3 text-right tabular-nums text-slate-700">{formatCurrency(metrics.value)}</td>
-        <td className={`px-3 py-3 text-right tabular-nums ${pctColor(metrics.lastRs)}`}>{formatCurrency(metrics.lastRs)}</td>
         <td className={`px-3 py-3 text-right tabular-nums font-medium ${pctColor(metrics.lastPct)}`}>{fmtPct(metrics.lastPct)}</td>
         <td className={`px-3 py-3 text-right tabular-nums font-medium ${pctColor(metrics.acc12Pct)}`}>{fmtPct(metrics.acc12Pct)}</td>
+        <td className={`px-3 py-3 text-right tabular-nums ${pctColor(metrics.acc12NetPct)}`}>{fmtPct(metrics.acc12NetPct)}</td>
+        <td className={`px-3 py-3 text-right tabular-nums font-medium ${pctColor(metrics.ytdPct)}`}>{fmtPct(metrics.ytdPct)}</td>
         <td className={`px-3 py-3 text-right tabular-nums font-semibold ${pctColor(metrics.accTotalPct)}`}>{fmtPct(metrics.accTotalPct)}</td>
       </tr>
       {open && (
         <tr className="bg-slate-50/60">
-          <td colSpan={6} className="px-3 py-2">
+          <td colSpan={7} className="px-3 py-2">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
@@ -191,6 +205,8 @@ export default function RentabilidadePage() {
   const [refYm, setRefYm] = useState<string>('');
   const [classFilter, setClassFilter] = useState('');
   const [bankFilter, setBankFilter] = useState('');
+  const [rateOp, setRateOp] = useState<'' | 'gt' | 'lt'>('');
+  const [rateVal, setRateVal] = useState('');
   const { data, isLoading } = useQuery({
     queryKey: ['asset-yield'],
     queryFn: () => investmentsApi.assetYield(),
@@ -205,16 +221,19 @@ export default function RentabilidadePage() {
     [data],
   );
 
-  // ativos com métricas no mês selecionado, filtrados por banco e classe
+  // ativos com métricas no mês selecionado, filtrados por banco/classe/taxa-ano
   const rows = useMemo(() => {
     if (!data) return [];
+    const rv = parseFloat(rateVal);
+    const rateActive = rateOp && !Number.isNaN(rv);
     return data.assets
       .filter((a) => !bankFilter || a.bank === bankFilter)
       .filter((a) => !classFilter || a.asset_class === classFilter)
       .map((a) => ({ a, metrics: computeMetrics(a, effectiveYm) }))
       .filter((r): r is { a: AssetYieldSeries; metrics: Metrics } => r.metrics !== null)
+      .filter((r) => !rateActive || (rateOp === 'gt' ? r.metrics.ytdPct > rv : r.metrics.ytdPct < rv))
       .sort((x, y) => y.metrics.value - x.metrics.value);
-  }, [data, effectiveYm, classFilter, bankFilter]);
+  }, [data, effectiveYm, classFilter, bankFilter, rateOp, rateVal]);
 
   const alertMonths = (data?.reconciliation || []).filter((r) => r.unlinked_flow > 1000);
 
@@ -287,6 +306,27 @@ export default function RentabilidadePage() {
                   ))}
                 </select>
               </div>
+              <div className="flex items-center gap-1">
+                <label className="text-xs text-slate-500 mr-1">Taxa ano</label>
+                <select
+                  value={rateOp}
+                  onChange={(e) => setRateOp(e.target.value as '' | 'gt' | 'lt')}
+                  className="px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-white"
+                >
+                  <option value="">—</option>
+                  <option value="gt">maior que</option>
+                  <option value="lt">menor que</option>
+                </select>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={rateVal}
+                  onChange={(e) => setRateVal(e.target.value)}
+                  placeholder="%"
+                  disabled={!rateOp}
+                  className="w-16 px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-white disabled:bg-slate-50"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -325,9 +365,10 @@ export default function RentabilidadePage() {
                   <tr>
                     <th className="text-left px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Ativo</th>
                     <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Valor</th>
-                    <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Rend. mês (R$)</th>
                     <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Rend. mês</th>
                     <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Acum. 12m</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase" title="Líquida de IR (aprox.)">Líq. 12m</th>
+                    <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Ano</th>
                     <th className="text-right px-3 py-3 text-xs font-semibold text-slate-500 uppercase">Total</th>
                   </tr>
                 </thead>

@@ -715,6 +715,8 @@ export interface Asset {
   rate_type: string | null;
   application_date: string | null;
   maturity_date: string | null;
+  ticker: string | null;
+  ir_exempt: boolean | null;
 }
 
 export interface InvestmentSnapshot {
@@ -933,6 +935,9 @@ export interface AssetYieldSeries {
   color: string | null;
   bank_id: number | null;
   bank: string | null;
+  contracted_rate: string | null;
+  ir_exempt: boolean;
+  ir_rate: number;
   current_value: number;
   yield_total_value: number;
   yield_accum_pct: number;

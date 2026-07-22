@@ -55,6 +55,7 @@ export default function AtivosPage() {
         liquidity_days: editing.liquidity_days,
         risk_level: editing.risk_level,
         is_active: editing.is_active,
+        ir_exempt: editing.ir_exempt,
       },
     });
   };
@@ -229,6 +230,23 @@ export default function AtivosPage() {
                       className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200"
                     />
                   </div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Isenção de IR</label>
+                  <select
+                    value={editing.ir_exempt === null || editing.ir_exempt === undefined ? 'auto' : editing.ir_exempt ? 'yes' : 'no'}
+                    onChange={(e) =>
+                      setEditing({
+                        ...editing,
+                        ir_exempt: e.target.value === 'auto' ? null : e.target.value === 'yes',
+                      })
+                    }
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 bg-white"
+                  >
+                    <option value="auto">Automático (por tipo)</option>
+                    <option value="yes">Isento de IR</option>
+                    <option value="no">Tributado</option>
+                  </select>
                 </div>
                 <label className="flex items-center gap-2 text-sm">
                   <input

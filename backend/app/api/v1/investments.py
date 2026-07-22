@@ -65,6 +65,8 @@ def _asset_to_response(asset: Asset) -> AssetResponse:
         rate_type=asset.rate_type.value if asset.rate_type else None,
         application_date=asset.application_date,
         maturity_date=asset.maturity_date,
+        ticker=asset.ticker,
+        ir_exempt=asset.ir_exempt,
     )
 
 

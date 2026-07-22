@@ -719,6 +719,73 @@ def _asset_flows_by_month(db: Session) -> Dict[int, Dict[str, Dict[str, Decimal]
     return out
 
 
+def _fmt_rate_num(d: Optional[Decimal]) -> str:
+    """Formata número da taxa em pt-BR sem zeros à direita (7.0500 -> '7,05')."""
+    if d is None:
+        return ""
+    s = f"{float(d):.2f}".rstrip("0").rstrip(".")
+    return s.replace(".", ",")
+
+
+def format_contracted_rate(asset) -> Optional[str]:
+    """Taxa contratada legível: 'IPCA + 7,05%', '100% CDI', '11% a.a.'."""
+    if not asset or asset.rate_index is None or asset.rate_spread is None:
+        return None
+    idx = asset.rate_index.value if hasattr(asset.rate_index, "value") else str(asset.rate_index)
+    rtype = asset.rate_type.value if hasattr(asset.rate_type, "value") else str(asset.rate_type)
+    spread = _fmt_rate_num(asset.rate_spread)
+    if rtype == "percentage":
+        return f"{spread}% {idx}"
+    # spread (aditivo)
+    if idx == "PRE":
+        return f"{spread}% a.a."
+    return f"{idx} + {spread}%"
+
+
+def _effective_ir_exempt(asset) -> bool:
+    """Isenção de IR: override manual (asset.ir_exempt) ou heurística por tipo/nome.
+
+    Heurística default (usuário pode sobrescrever por ativo):
+    isentos = LCA/LCI/CRA/CRI (via is_ir_exempt) + FII (classe 'fii', nome com
+    'FII' ou ticker XXXX11 — dividendos isentos p/ PF). Debêntures incentivadas
+    ficam a cargo do toggle manual.
+    """
+    from app.utils.tax_calculator import is_ir_exempt
+    import re
+    if asset is None:
+        return False
+    if asset.ir_exempt is not None:
+        return bool(asset.ir_exempt)
+    name = asset.name or ""
+    up = name.upper()
+    code = asset.asset_class.code if asset.asset_class else None
+    if is_ir_exempt(name, code):
+        return True
+    if code is not None and getattr(code, "value", None) == "fii":
+        return True
+    if "FII" in up or re.search(r"\b[A-Z]{4}11\b", up):
+        return True
+    return False
+
+
+def _effective_ir_rate(asset) -> float:
+    """Alíquota de IR efetiva (sobre o ganho) p/ estimar rentabilidade líquida.
+
+    0 se isento; tabela de previdência p/ VGBL/PGBL; senão RF regressiva por
+    dias corridos desde a aplicação (assume >720d/15% se sem data)."""
+    from app.utils.tax_calculator import get_ir_rate_renda_fixa, get_ir_rate_previdencia
+    if _effective_ir_exempt(asset):
+        return 0.0
+    name = (asset.name or "").upper() if asset else ""
+    code = asset.asset_class.code.value if (asset and asset.asset_class) else None
+    app_date = asset.application_date if asset else None
+    days = (date.today() - app_date).days if app_date else 999999
+    if code == "previdencia" or "VGBL" in name or "PGBL" in name:
+        years = days // 365
+        return float(get_ir_rate_previdencia(years))
+    return float(get_ir_rate_renda_fixa(days))
+
+
 def get_asset_yield_series(
     db: Session, carteira_account_id: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -797,6 +864,9 @@ def get_asset_yield_series(
                 "color": ac.color if ac else "#6B7280",
                 "bank_id": bank_id,
                 "bank": bank_name,
+                "contracted_rate": format_contracted_rate(p.asset),
+                "ir_exempt": _effective_ir_exempt(p.asset),
+                "ir_rate": _effective_ir_rate(p.asset),
             }
 
     flows = _asset_flows_by_month(db)
@@ -810,6 +880,9 @@ def get_asset_yield_series(
                     "asset_class": a.asset_class.name if a.asset_class else None,
                     "color": a.asset_class.color if a.asset_class else "#6B7280",
                     "bank_id": None, "bank": None,
+                    "contracted_rate": format_contracted_rate(a),
+                    "ir_exempt": _effective_ir_exempt(a),
+                    "ir_rate": _effective_ir_rate(a),
                 }
 
     # Reconciliação mensal (soma dos ativos)

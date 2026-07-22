@@ -52,6 +52,8 @@ class AssetUpdate(BaseModel):
     rate_type: Optional[RateType] = None
     application_date: Optional[date] = None
     maturity_date: Optional[date] = None
+    ticker: Optional[str] = None
+    ir_exempt: Optional[bool] = None
 
 
 class AssetResponse(BaseModel):
@@ -72,6 +74,8 @@ class AssetResponse(BaseModel):
     rate_type: Optional[str] = None
     application_date: Optional[date] = None
     maturity_date: Optional[date] = None
+    ticker: Optional[str] = None
+    ir_exempt: Optional[bool] = None
     model_config = ConfigDict(from_attributes=True)
 
 

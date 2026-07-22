@@ -98,6 +98,9 @@ class Asset(Base):
     rate_index = Column(Enum(RateIndex, inherit_schema=True), nullable=True)      # CDI, IPCA, PRE, etc.
     rate_spread = Column(Numeric(10, 4), nullable=True)       # 100 (100% CDI), 7.0 (IPCA+7%)
     rate_type = Column(Enum(RateType, inherit_schema=True), nullable=True)         # percentage ou spread
+
+    # Isenção de IR (override manual; None = deriva da heurística por tipo/nome)
+    ir_exempt = Column(Boolean, nullable=True)
     application_date = Column(Date, nullable=True)            # Data de aplicação
     maturity_date = Column(Date, nullable=True)               # Data de vencimento
 
