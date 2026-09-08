@@ -8,7 +8,7 @@ import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import { rulesApi, categoriesApi } from '@/lib/api';
-import { Plus, Edit2, Trash2, Play, ArrowLeft } from 'lucide-react';
+import { Plus, Edit2, Trash2, Play, ArrowLeft, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 
 export default function RegrasPage() {
@@ -67,6 +67,44 @@ export default function RegrasPage() {
   const applyMutation = useMutation({
     mutationFn: () => rulesApi.applyAll(),
   });
+
+  // Atualização completa: backfill → auto-generate → apply-all
+  const [updateLog, setUpdateLog] = useState<string[]>([]);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const handleUpdateRules = async () => {
+    setIsUpdating(true);
+    setUpdateLog([]);
+    try {
+      setUpdateLog((l) => [...l, 'Reindexando histórico de aprendizado...']);
+      const backfill = await rulesApi.backfillHistory();
+      setUpdateLog((l) => [
+        ...l,
+        `Histórico: ${backfill.new_records} novos + ${backfill.updated_records} atualizados (total ${backfill.total_history_records})`,
+      ]);
+
+      setUpdateLog((l) => [...l, 'Gerando novas regras a partir do histórico...']);
+      const generate = await rulesApi.autoGenerate();
+      setUpdateLog((l) => [
+        ...l,
+        `Regras geradas: ${generate.rules_created} novas (total ativo: ${generate.total_active_rules})`,
+      ]);
+
+      setUpdateLog((l) => [...l, 'Aplicando regras às transações sem categoria...']);
+      const apply = await rulesApi.applyAll();
+      setUpdateLog((l) => [
+        ...l,
+        `Transações categorizadas: ${apply.categorized} de ${apply.total_pending} pendentes`,
+        'Concluído.',
+      ]);
+
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+    } catch (err: any) {
+      setUpdateLog((l) => [...l, `Erro: ${err?.message ?? 'desconhecido'}`]);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
 
   const resetForm = () => {
     setFormData({
@@ -160,6 +198,15 @@ export default function RegrasPage() {
               <Play size={18} className="mr-2" />
               Aplicar Regras
             </Button>
+            <Button
+              variant="secondary"
+              onClick={handleUpdateRules}
+              isLoading={isUpdating}
+              title="Reindexar histórico, gerar novas regras automáticas e aplicar às transações pendentes"
+            >
+              <RefreshCw size={18} className="mr-2" />
+              Atualizar Regras
+            </Button>
             <Button onClick={() => setIsFormOpen(true)}>
               <Plus size={18} className="mr-2" />
               Nova Regra
@@ -167,10 +214,35 @@ export default function RegrasPage() {
           </div>
         </div>
 
-        {/* Resultado da aplicação */}
+        {/* Resultado da aplicação simples */}
         {applyMutation.isSuccess && (
           <div className="p-4 bg-green-50 rounded-lg text-green-700">
             {applyMutation.data?.categorized} transações categorizadas automaticamente
+          </div>
+        )}
+
+        {/* Log da atualização completa */}
+        {updateLog.length > 0 && (
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <p className="text-sm font-medium text-gray-700 mb-2">Atualização de regras</p>
+            <ul className="space-y-1">
+              {updateLog.map((line, i) => (
+                <li
+                  key={i}
+                  className={`text-sm font-mono ${
+                    line.startsWith('Erro')
+                      ? 'text-red-600'
+                      : line === 'Concluído.'
+                      ? 'text-green-600 font-semibold'
+                      : line.endsWith('...')
+                      ? 'text-gray-500 italic'
+                      : 'text-gray-800'
+                  }`}
+                >
+                  {line}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

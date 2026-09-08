@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
     UPLOAD_DIR: str = "/tmp/uploads"
 
+    # Agente de carga (chat com Claude)
+    ANTHROPIC_API_KEY: str = ""              # chave da API Anthropic
+    AGENT_MODEL: str = "claude-opus-4-8"     # modelo do agente
+    # Pasta onde ficam os extratos que o agente pode carregar (ambiente local)
+    EXTRATOS_DIR: str = ""
+    # Base URL do próprio backend para o agente chamar os endpoints internamente
+    INTERNAL_BASE_URL: str = "http://127.0.0.1:8000"
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

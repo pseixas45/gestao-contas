@@ -29,3 +29,5 @@ pdfplumber==0.11.0  # PDF text extraction (Itaú carteira)
 # Utils
 python-dotenv==1.0.0
 httpx==0.26.0
+
+anthropic>=0.40.0

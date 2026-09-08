@@ -274,6 +274,18 @@ export const rulesApi = {
     const response = await api.post('/rules/seed');
     return response.data;
   },
+
+  backfillHistory: async (): Promise<{ new_records: number; updated_records: number; total_history_records: number }> => {
+    const response = await api.post('/rules/backfill-history');
+    return response.data;
+  },
+
+  autoGenerate: async (minOccurrences = 3, minAgreement = 0.9): Promise<{ rules_created: number; skipped_existing: number; total_active_rules: number }> => {
+    const response = await api.post('/rules/auto-generate', null, {
+      params: { min_occurrences: minOccurrences, min_agreement: minAgreement },
+    });
+    return response.data;
+  },
 };
 
 // Imports

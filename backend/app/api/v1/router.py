@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, banks, accounts, categories, transactions, rules, imports, projections, admin, exchange, budgets, reports, investments, expense_reports
+from app.api.v1 import auth, banks, accounts, categories, transactions, rules, imports, projections, admin, exchange, budgets, reports, investments, expense_reports, agent
 
 api_router = APIRouter()
 
@@ -18,3 +18,4 @@ api_router.include_router(budgets.router, tags=["Orçamentos"])
 api_router.include_router(reports.router, tags=["Relatórios"])
 api_router.include_router(investments.router, prefix="/investments", tags=["Investimentos"])
 api_router.include_router(expense_reports.router, prefix="/expense-reports", tags=["Reembolso"])
+api_router.include_router(agent.router, prefix="/agent", tags=["Agente de Carga"])
