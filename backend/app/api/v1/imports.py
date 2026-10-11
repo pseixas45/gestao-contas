@@ -141,11 +141,16 @@ def reconcile_daily_balance(raw_data, mapping, service):
     statement_final_balance. balance_will_match=None => formato não reconciliável.
     """
     from decimal import Decimal
-    result = {"balance_will_match": None, "balance_check_detail": None, "statement_final_balance": None}
+    result = {
+        "balance_will_match": None, "balance_check_detail": None,
+        "statement_final_balance": None,
+        "opening": None, "opening_date": None, "last_checkpoint_date": None,
+    }
     if not mapping.balance_column or not mapping.date_column:
         return result
 
     opening = None
+    opening_date = None
     checkpoints = {}          # date -> Decimal (saldo EOD)
     txn_by_date = {}          # date -> Decimal (soma das transações do dia)
 
@@ -166,6 +171,7 @@ def reconcile_daily_balance(raw_data, mapping, service):
         if is_saldo_row:
             if 'ANTERIOR' in desc:
                 opening = bal
+                opening_date = trans_date
             else:
                 checkpoints[trans_date] = bal
         elif amt is not None:
@@ -186,6 +192,9 @@ def reconcile_daily_balance(raw_data, mapping, service):
 
     last_ck = max(checkpoints.keys())
     result["statement_final_balance"] = checkpoints[last_ck]
+    result["opening"] = opening
+    result["opening_date"] = opening_date
+    result["last_checkpoint_date"] = last_ck
     if first_div:
         d, acc, ext = first_div
         result["balance_will_match"] = False
@@ -218,7 +227,7 @@ async def analyze_import(
     """
     from datetime import date as date_type
     from decimal import Decimal
-    from app.utils.normalization import normalize_for_hash, calculate_similarity, find_near_duplicate
+    from app.utils.normalization import description_similarity, find_near_duplicate
     from app.services.import_service import detect_installment, adjust_date_for_credit_card, find_previous_installment, get_installment_base_description
 
     service = ImportService(db)
@@ -255,6 +264,7 @@ async def analyze_import(
     seen_hashes = set()
     all_dates = []
     all_new_amounts = []  # Amounts of new (non-duplicate) transactions
+    all_new_dated = []  # (effective_date, amount) das novas — p/ cross-check de saldo
     transactions_preview = []  # All transactions for review
     running_balance = Decimal("0")  # Saldo acumulado para validação linha a linha
     first_balance_divergence_row = None  # Primeira linha onde saldo diverge
@@ -464,10 +474,8 @@ async def analyze_import(
             )
 
             if fuzzy_match:
-                # Calcular similaridade para classificar
-                norm_new = normalize_for_hash(description)
-                norm_existing = normalize_for_hash(fuzzy_match.description)
-                similarity = calculate_similarity(norm_new, norm_existing)
+                # Calcular similaridade para classificar (mesmo score do dedup)
+                similarity = description_similarity(description, fuzzy_match.description)
 
                 if similarity >= 0.85:
                     fuzzy_duplicate_count += 1
@@ -492,6 +500,7 @@ async def analyze_import(
             # Rastrear amounts para validação de saldo (apenas novas)
             if row_status == "new":
                 all_new_amounts.append(amount)
+                all_new_dated.append((trans_date, amount))
 
             transactions_preview.append(TransactionPreviewRow(
                 row=idx + 1, date=trans_date.isoformat(),
@@ -551,6 +560,48 @@ async def analyze_import(
         balance_will_match = recon["balance_will_match"]
         balance_check_detail = recon["balance_check_detail"]
         balance_check_method = "daily_reconciliation"
+
+        # Cross-check adicional: a reconciliação diária só valida a CONSISTÊNCIA
+        # INTERNA do arquivo. Um extrato internamente consistente ainda produz
+        # saldo final errado se o dedup deixar passar uma duplicata (ex: near-dup
+        # com nº de referência truncado) — ela entra como "nova" e é contada em
+        # dobro sobre o original já no banco. Aqui projetamos o saldo do BANCO no
+        # último checkpoint (saldo atual do período + novas) e comparamos com o
+        # checkpoint do arquivo. O desvio pré-existente (banco vs abertura do
+        # arquivo) é descontado para não acusar falso-positivo por resíduos antigos.
+        if balance_will_match and recon["opening"] is not None:
+            opening_date = recon["opening_date"]
+            last_ck_date = recon["last_checkpoint_date"]
+            opening = recon["opening"]
+            F = recon["statement_final_balance"]
+            if opening_date and last_ck_date:
+                from sqlalchemy import func
+                existing_period = db.query(
+                    func.coalesce(func.sum(Transaction.amount), Decimal("0"))
+                ).filter(
+                    Transaction.account_id == data.account_id,
+                    Transaction.date > opening_date,
+                    Transaction.date <= last_ck_date,
+                ).scalar() or Decimal("0")
+                new_period = sum(
+                    (amt for (d, amt) in all_new_dated
+                     if opening_date < d <= last_ck_date),
+                    Decimal("0"),
+                )
+                # Erro introduzido por ESTA carga = (o que ficará no período) − (o
+                # que o arquivo diz que o período soma). Deve ser ~0.
+                introduced = (Decimal(str(existing_period)) + new_period) - (F - opening)
+                if abs(introduced) >= Decimal("0.01"):
+                    balance_will_match = False
+                    balance_check_method = "daily_reconciliation+db_crosscheck"
+                    direcao = "a mais" if introduced > 0 else "a menos"
+                    balance_check_detail = (
+                        f"Arquivo internamente OK, MAS a carga deixaria o saldo do banco "
+                        f"R$ {abs(introduced):.2f} {direcao} em relação ao extrato até "
+                        f"{last_ck_date.strftime('%d/%m/%Y')}. Provável duplicata não "
+                        f"detectada ou lançamento faltante/duplicado — reconcilie as novas "
+                        f"vs. já existentes (mesma data+valor) antes de gravar."
+                    )
     elif last_file_balance is not None:
         statement_final_balance = last_file_balance
         projected_balance = account_current_balance + calculated_total

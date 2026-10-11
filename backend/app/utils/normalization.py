@@ -115,6 +115,45 @@ def calculate_similarity(text1: str, text2: str) -> float:
     return len(intersection) / len(union)
 
 
+def _core_tokens(normalized: str) -> set:
+    """Tokens significativos, ignorando números de referência puros.
+
+    Bancos (ex: débito automático Itaú) anexam o nº do beneficiário/convênio no
+    fim da descrição, e esse número varia/é truncado entre exports ("DA CLARO
+    CELULAR 52988" vs "DA CLARO CELULAR 5"; "DA ELETROPAULO 08334046" vs
+    "DA ELETROPAULO 0833"). Tokens puramente numéricos são descartados para a
+    comparação fuzzy — a data (±1), o valor exato e a moeda já ancoram a
+    identidade da transação. Marcadores de parcela ("1/2") contêm "/" e NÃO são
+    puramente numéricos, então permanecem (parcelas distintas continuam distintas).
+    """
+    return {t for t in normalized.split() if not t.isdigit()}
+
+
+def description_similarity(desc_a: str, desc_b: str) -> float:
+    """Similaridade entre duas descrições para deduplicação fuzzy.
+
+    Retorna o maior entre:
+    - Jaccard sobre a descrição normalizada completa; e
+    - Jaccard sobre os tokens significativos (sem nº de referência puros).
+
+    O segundo termo torna a detecção robusta a números de referência/beneficiário
+    que variam entre formatos de export do mesmo banco (ver [_core_tokens]).
+    """
+    na = normalize_for_hash(desc_a)
+    nb = normalize_for_hash(desc_b)
+    raw = calculate_similarity(na, nb)
+
+    core_a = _core_tokens(na)
+    core_b = _core_tokens(nb)
+    if not core_a or not core_b:
+        return raw
+
+    inter = core_a & core_b
+    union = core_a | core_b
+    core_sim = len(inter) / len(union)
+    return max(raw, core_sim)
+
+
 def find_near_duplicate(
     db: Session,
     account_id: int,
@@ -163,12 +202,9 @@ def find_near_duplicate(
     if not candidates:
         return None
 
-    # Comparar descrições normalizadas
-    normalized_new = normalize_for_hash(description)
-
+    # Comparar descrições (robusto a nº de referência variáveis entre exports)
     for candidate in candidates:
-        normalized_existing = normalize_for_hash(candidate.description)
-        similarity = calculate_similarity(normalized_new, normalized_existing)
+        similarity = description_similarity(description, candidate.description)
         if similarity >= 0.85:
             # Se ambos têm card_payment_date, devem ser compatíveis (±1 dia)
             if card_payment_date and candidate.card_payment_date:
