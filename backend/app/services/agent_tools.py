@@ -9,6 +9,8 @@ Ferramentas de ESCRITA (processar_extrato, remover_transacao) exigem
 o usuário confirmar explicitamente.
 """
 import os
+import re
+from datetime import date
 from typing import Any, Dict, Optional
 
 import httpx
@@ -20,6 +22,37 @@ from app.config import settings
 # consumido em processar_extrato (mesmo processo). Evita trafegar o mapping
 # (com acentos) pelo modelo.
 _MAPPING_CACHE: Dict[int, Dict[str, Any]] = {}
+
+
+def _account_is_credit_card(ctx: "ToolContext", account_id: int) -> bool:
+    """True se a conta é cartão de crédito (exige data da fatura no import)."""
+    for a in listar_contas(ctx):
+        if a["id"] == account_id:
+            return "credit" in str(a.get("tipo") or "").lower()
+    return False
+
+
+def _infer_fatura_date(filename: str) -> Optional[str]:
+    """Infere a data da fatura a partir do nome do arquivo (ISO yyyy-mm-dd).
+
+    Os extratos de cartão trazem a data no nome: "Visa 260906" (YYMMDD →
+    2026-09-06), "XPVisa 260905", "C6 Master 261010", "Master 261020 - 261007"
+    (usa o 1º token, o vencimento → 2026-10-20), "Visa fatura-20260606"
+    (YYYYMMDD). Retorna None se não achar um token de data plausível — nesse caso
+    o agente deve pedir/confirmar a data com o usuário.
+    """
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})", filename)  # YYYYMMDD
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.search(r"\b(\d{2})(\d{2})(\d{2})\b", filename)  # YYMMDD
+        if not m:
+            return None
+        y, mo, d = 2000 + int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return None
 
 
 class ToolContext:
@@ -110,6 +143,15 @@ def analisar_extrato(ctx: ToolContext, arquivo: str, account_id: int,
     path = ctx.resolve(arquivo)
     if not path:
         return {"erro": f"Arquivo não encontrado em {ctx.extratos_dir!r}: {arquivo}"}
+
+    # Cartão de crédito EXIGE a data da fatura (card_payment_date). Nenhum extrato
+    # de cartão traz essa data como coluna, então ou o agente a informa, ou nós a
+    # inferimos do nome do arquivo. Sem ela, a transação fica sem fatura.
+    is_card = _account_is_credit_card(ctx, account_id)
+    cpd_inferida = None
+    if is_card and not card_payment_date:
+        card_payment_date = cpd_inferida = _infer_fatura_date(arquivo)
+
     with ctx.client() as c:
         with open(path, "rb") as fh:
             up = c.post("/imports/upload", files={"file": (arquivo, fh, "application/octet-stream")},
@@ -132,8 +174,10 @@ def analisar_extrato(ctx: ToolContext, arquivo: str, account_id: int,
         if an.status_code != 200:
             return {"erro": f"analyze falhou ({an.status_code}): {an.text[:300]}"}
         d = an.json()
-        _MAPPING_CACHE[preview["batch_id"]] = {"mapping": m, "card_payment_date": card_payment_date}
-        return {
+        _MAPPING_CACHE[preview["batch_id"]] = {
+            "mapping": m, "card_payment_date": card_payment_date, "is_card": is_card,
+        }
+        out = {
             "batch_id": preview["batch_id"],
             "coluna_valor_usada": m.get("amount_column"),
             "novas": d["new_count"], "duplicatas": d["duplicate_count"], "erros": d["error_count"],
@@ -143,6 +187,16 @@ def analisar_extrato(ctx: ToolContext, arquivo: str, account_id: int,
             "detalhe_saldo": d.get("balance_check_detail"),
             "saldo_final_extrato": d.get("statement_final_balance"),
         }
+        if is_card:
+            out["cartao"] = True
+            out["data_fatura"] = card_payment_date
+            if cpd_inferida:
+                out["data_fatura_origem"] = "inferida do nome do arquivo"
+            if not card_payment_date:
+                out["aviso"] = ("CARTÃO SEM DATA DA FATURA: não consegui inferir do nome do "
+                                "arquivo. Confirme com o usuário e rode de novo com "
+                                "card_payment_date=YYYY-MM-DD antes de processar.")
+        return out
 
 
 def processar_extrato(ctx: ToolContext, batch_id: int, account_id: int,
@@ -157,6 +211,11 @@ def processar_extrato(ctx: ToolContext, batch_id: int, account_id: int,
                         "Rode analisar_extrato imediatamente antes de processar."}
     mapping = dict(cached["mapping"])
     cpd = card_payment_date or cached.get("card_payment_date")
+    # Guardrail: cartão de crédito não pode ser gravado sem a data da fatura.
+    if cached.get("is_card") and not cpd:
+        return {"erro": "Cartão de crédito exige a data da fatura. Rode analisar_extrato "
+                        "novamente com card_payment_date=YYYY-MM-DD (infira do nome do "
+                        "arquivo, ex: 'Visa 260906' → 2026-09-06, ou pergunte ao usuário)."}
     with ctx.client() as c:
         body: Dict[str, Any] = {
             "batch_id": batch_id, "column_mapping": mapping, "account_id": account_id,
