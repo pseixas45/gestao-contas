@@ -129,15 +129,52 @@ def _core_tokens(normalized: str) -> set:
     return {t for t in normalized.split() if not t.isdigit()}
 
 
+def _token_matches(token: str, token_set: set) -> bool:
+    """Um token casa com algum do conjunto: igual, OU um é prefixo do outro
+    (ambos >= 4 chars). O prefixo cobre truncamento entre formatos do mesmo banco
+    (ex: "INTERNACIONA" ~ "INTERNACIONAL", "EDUCACAO" ~ "EDUC"). O piso de 4 chars
+    evita casar marcadores curtos/genéricos (parcela "1/3" vs "2/3" não casa).
+    """
+    for u in token_set:
+        if token == u:
+            return True
+        if len(token) >= 4 and len(u) >= 4 and (u.startswith(token) or token.startswith(u)):
+            return True
+    return False
+
+
+def _containment_score(core_a: set, core_b: set) -> float:
+    """Fração dos tokens do MENOR conjunto que casam (igual ou prefixo) no maior.
+
+    Robusto a tokens EXTRA em um dos lados — tipicamente o local do
+    estabelecimento que a fatura de cartão anexa à descrição em alguns formatos
+    ("Netflix.com" vs "Netflix.com Sao Paulo Br"; "Twilio Inc" vs
+    "Twilio Inc Www.twilio.co Us"). Como data (±1), valor exato e moeda já ancoram
+    a transação, se o nome do estabelecimento (conjunto menor) está contido no
+    outro, é a mesma compra.
+
+    Guarda contra falso-positivo: um único token só pontua se for distintivo
+    (>= 6 chars) — evita casar descrições genéricas de 1 palavra (ex: "PIX").
+    """
+    if not core_a or not core_b:
+        return 0.0
+    small, large = (core_a, core_b) if len(core_a) <= len(core_b) else (core_b, core_a)
+    if len(small) == 1 and len(next(iter(small))) < 6:
+        return 0.0
+    matched = sum(1 for t in small if _token_matches(t, large))
+    return matched / len(small)
+
+
 def description_similarity(desc_a: str, desc_b: str) -> float:
     """Similaridade entre duas descrições para deduplicação fuzzy.
 
-    Retorna o maior entre:
-    - Jaccard sobre a descrição normalizada completa; e
-    - Jaccard sobre os tokens significativos (sem nº de referência puros).
-
-    O segundo termo torna a detecção robusta a números de referência/beneficiário
-    que variam entre formatos de export do mesmo banco (ver [_core_tokens]).
+    Retorna o maior entre três sinais (todos robustos a variações de formato do
+    mesmo banco, com data/valor/moeda já ancorando a transação):
+    - Jaccard sobre a descrição normalizada completa;
+    - Jaccard sobre os tokens significativos (sem nº de referência puros,
+      ver [_core_tokens]); e
+    - Contenção de tokens (ver [_containment_score]) — cobre local do
+      estabelecimento anexado e truncamento de palavras entre formatos.
     """
     na = normalize_for_hash(desc_a)
     nb = normalize_for_hash(desc_b)
@@ -151,7 +188,8 @@ def description_similarity(desc_a: str, desc_b: str) -> float:
     inter = core_a & core_b
     union = core_a | core_b
     core_sim = len(inter) / len(union)
-    return max(raw, core_sim)
+    containment = _containment_score(core_a, core_b)
+    return max(raw, core_sim, containment)
 
 
 def find_near_duplicate(
