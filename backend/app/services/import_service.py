@@ -1171,13 +1171,22 @@ class ImportService:
 
         # Detectar a linha de cabeçalho real (Itaú/Master exportam .xlsx com
         # logo/metadados/dados de fatura antes do cabeçalho da tabela)
-        header_row = self._find_header_row([list(r) for r in rows])
+        list_rows = [list(r) for r in rows]
+        header_row = self._find_header_row(list_rows)
 
-        headers = [str(h).strip() if h else f'col_{i}' for i, h in enumerate(rows[header_row])]
+        if header_row == 0 and self._looks_like_data_row(list_rows[0]):
+            # Arquivo SEM cabeçalho (ex: export curto do XP Visa que começa direto
+            # nos lançamentos) -> sintetizar nomes por conteúdo e manter TODAS as linhas.
+            headers = self._synthesize_headers(list_rows)
+            logger.info(f"XLSX sem cabeçalho detectado; colunas sintetizadas: {headers}")
+            data_rows = rows[0:]
+        else:
+            headers = [str(h).strip() if h else f'col_{i}' for i, h in enumerate(rows[header_row])]
+            data_rows = rows[header_row + 1:]
 
         # Converter para dicionários
         result = []
-        for row in rows[header_row + 1:]:
+        for row in data_rows:
             if any(cell is not None for cell in row):
                 row_dict = {
                     headers[i]: row[i] if i < len(row) else None
@@ -1213,6 +1222,82 @@ class ImportService:
                 best_score, best_row = score, i
         return best_row if best_score >= 2 else 0
 
+    @staticmethod
+    def _cell_is_date(v: Any) -> bool:
+        if isinstance(v, (datetime, date)):
+            return True
+        s = str(v).strip()
+        return bool(re.match(r'\d{2}[/-]\d{2}[/-]\d{4}', s) or re.match(r'\d{4}-\d{2}-\d{2}', s))
+
+    @classmethod
+    def _looks_like_data_row(cls, row: List[Any]) -> bool:
+        """True se a linha parece um lançamento (dado), não um cabeçalho de rótulos.
+
+        Usado para distinguir um arquivo SEM cabeçalho (ex: export curto do XP Visa
+        que começa direto nos lançamentos) de um cabeçalho com nomes não-padrão.
+        A heurística: o 1º valor não-vazio é uma data ou número (rótulos são texto).
+        """
+        for cell in row:
+            if cell is None or str(cell).strip() == '':
+                continue
+            if cls._cell_is_date(cell):
+                return True
+            if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+                return True
+            return False  # 1ª célula preenchida é texto -> provável rótulo/cabeçalho
+        return False
+
+    @classmethod
+    def _synthesize_headers(cls, rows: List[List[Any]], sample: int = 15) -> List[str]:
+        """Sintetiza nomes de coluna por CONTEÚDO para arquivos sem cabeçalho.
+
+        Gera nomes que o ColumnDetector reconhece ('data', 'valor', 'parcela',
+        'descricao') inferindo o papel de cada coluna pelos dados — assim o fallback
+        posicional (que assume amount no índice 2) não erra em layouts como o do
+        XP Visa [Data, Estabelecimento, Portador, Valor, Parcela] (amount no índice 3).
+        """
+        sample_rows = rows[:sample]
+        ncols = max((len(r) for r in sample_rows), default=0)
+
+        def is_num(v: Any) -> bool:
+            if isinstance(v, bool):
+                return False
+            if isinstance(v, (int, float)):
+                return True
+            s = str(v).strip().replace('R$', '').replace(' ', '').replace('.', '').replace(',', '').lstrip('+-')
+            return s.isdigit() and s != ''
+
+        def is_parcela(v: Any) -> bool:
+            s = str(v).strip().lower()
+            return bool(re.search(r'\d{1,2}\s*(?:de|/)\s*\d{1,2}', s)) or s in ('-', 'unica', 'única')
+
+        names: List[str] = []
+        date_done = amount_done = parcela_done = False
+        for j in range(ncols):
+            vals = [r[j] for r in sample_rows
+                    if j < len(r) and r[j] is not None and str(r[j]).strip() != '']
+            if not vals:
+                names.append(f'col_{j}')
+                continue
+            frac = lambda f: sum(1 for v in vals if f(v)) / len(vals)
+            if not date_done and frac(cls._cell_is_date) >= 0.6:
+                names.append('data'); date_done = True
+            elif not parcela_done and frac(is_parcela) >= 0.6:
+                names.append('parcela'); parcela_done = True
+            elif not amount_done and frac(is_num) >= 0.6:
+                names.append('valor'); amount_done = True
+            else:
+                names.append(f'col_{j}')
+
+        # A coluna de texto mais "rica" (maior comprimento médio) vira a descrição.
+        text_idx = [j for j, n in enumerate(names) if n.startswith('col_')]
+        if text_idx:
+            def avg_len(j: int) -> float:
+                vs = [str(r[j]) for r in sample_rows if j < len(r) and r[j] is not None]
+                return sum(len(v) for v in vs) / max(len(vs), 1)
+            names[max(text_idx, key=avg_len)] = 'descricao'
+        return names
+
     def _parse_xls(self, file_path: str) -> List[Dict[str, Any]]:
         """Parse arquivo Excel .xls (formato antigo)."""
         import xlrd
@@ -1227,14 +1312,21 @@ class ImportService:
         all_rows = [[ws.cell_value(i, j) for j in range(ws.ncols)] for i in range(ws.nrows)]
         header_row = self._find_header_row(all_rows)
 
-        headers = [
-            str(ws.cell_value(header_row, j)).strip() if ws.cell_value(header_row, j) else f'col_{j}'
-            for j in range(ws.ncols)
-        ]
+        if header_row == 0 and self._looks_like_data_row(all_rows[0]):
+            # Arquivo SEM cabeçalho -> sintetizar nomes por conteúdo e manter todas as linhas.
+            headers = self._synthesize_headers(all_rows)
+            logger.info(f"XLS sem cabeçalho detectado; colunas sintetizadas: {headers}")
+            data_start = 0
+        else:
+            headers = [
+                str(ws.cell_value(header_row, j)).strip() if ws.cell_value(header_row, j) else f'col_{j}'
+                for j in range(ws.ncols)
+            ]
+            data_start = header_row + 1
 
         # Converter para dicionários, filtrando lançamentos futuros (Itaú)
         result = []
-        for i in range(header_row + 1, ws.nrows):
+        for i in range(data_start, ws.nrows):
             row_vals = [ws.cell_value(i, j) for j in range(ws.ncols)]
             # Detectar marcador "lançamentos futuros" / "saídas futuras" (Itaú)
             first_cell = str(row_vals[0]).strip().lower() if row_vals[0] else ''
