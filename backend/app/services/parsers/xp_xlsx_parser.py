@@ -82,8 +82,16 @@ class XPXlsxParser:
             if current_class is None:
                 continue
 
-            # Linha de posição: precisa ter um valor de mercado na coluna "Posição"
-            value = self._col(r, col_map, ("posição a mercado", "posição", "posicao a mercado", "posicao"))
+            # Linha de posição: precisa ter um valor de mercado. O nome da coluna
+            # varia por layout/ano do extrato XP: "Posição"/"Posição a mercado"
+            # (2026-06 e antes) e "Saldo"/"Saldo a mercado" (2026-09 em diante).
+            # Excluir "líquido"/"disponível" p/ não pegar "Saldo líquido" por engano.
+            value = self._col(
+                r, col_map,
+                ("posição a mercado", "posição", "posicao a mercado", "posicao",
+                 "saldo a mercado", "saldo"),
+                exclude=("líquido", "liquido", "disponível", "disponivel"),
+            )
             if value is None:
                 continue
 
@@ -96,7 +104,7 @@ class XPXlsxParser:
             invested = self._col(r, col_map, ("valor aplicado",), exclude=("original",))
             if invested is not None:
                 pos["value_invested"] = invested
-            net = self._col(r, col_map, ("valor líquido", "valor liquido"))
+            net = self._col(r, col_map, ("valor líquido", "valor liquido", "saldo líquido", "saldo liquido"))
             if net is not None:
                 pos["value_net"] = net
             alloc = self._col_pct(r, col_map, ("% alocação", "% alocacao"))
@@ -111,7 +119,7 @@ class XPXlsxParser:
             app_date = self._col_date(r, col_map, ("data aplicação", "data aplicacao"))
             if app_date is not None:
                 pos["application_date"] = app_date
-            rate = self._col_raw(r, col_map, ("taxa a mercado",))
+            rate = self._col_raw(r, col_map, ("taxa a mercado", "rentabilidade a mercado"))
             if rate:
                 pos["contracted_rate"] = rate
             positions.append(pos)
