@@ -1215,6 +1215,8 @@ class ImportService:
                 result.append(row_dict)
 
         wb.close()
+        if header_row > 0:
+            result = self._extract_preheader_credits(list_rows, header_row, headers) + result
         return self._merge_itau_international_rows(result)
 
     # Palavras-chave que identificam a linha de cabeçalho de um extrato.
@@ -1360,6 +1362,8 @@ class ImportService:
                 }
                 result.append(row_dict)
 
+        if header_row > 0:
+            result = self._extract_preheader_credits(all_rows, header_row, headers) + result
         return self._merge_itau_international_rows(result)
 
     def _merge_itau_international_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1418,6 +1422,51 @@ class ImportService:
                     row[dk] = carried_date
                 carried_date = None
             out.append(row)
+        return out
+
+    def _extract_preheader_credits(
+        self, all_rows: List[List[Any]], header_row: int, headers: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Captura lançamentos de PAGAMENTO/ESTORNO que aparecem ANTES do cabeçalho
+        da tabela na fatura Itaú (bloco "total da fatura anterior").
+
+        A fatura Itaú lista o "PAGAMENTO EFETUADO" (quitação da fatura anterior)
+        logo no topo, antes do primeiro cabeçalho "data/lançamento/valor". O
+        parser começava a ler só depois do cabeçalho → o pagamento era descartado
+        e o saldo do cartão ficava inflado pela dívida já quitada (ex.: fatura de
+        novembro fechava em −39.300,72 em vez de −23.228,61). Aqui varremos as
+        linhas anteriores ao cabeçalho e recuperamos essas linhas (mesma posição
+        de colunas do cabeçalho). O sinal é tratado adiante pela auto-inversão de
+        cartão (pagamento negativo no arquivo → positivo = reduz dívida).
+
+        Guarda: só captura linhas que contêm a marca "pagamento efetuado"/"estorno"
+        E têm data parseável + valor numérico — não afeta outras linhas/formatos.
+        """
+        import unicodedata
+
+        def _deaccent(s: str) -> str:
+            return ''.join(
+                c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c)
+            )
+
+        markers = ('pagamento efetuado', 'estorno')
+        out: List[Dict[str, Any]] = []
+        for i in range(min(header_row, len(all_rows))):
+            row = list(all_rows[i])
+            if not any(
+                isinstance(v, str) and any(m in _deaccent(v).lower() for m in markers)
+                for v in row
+            ):
+                continue
+            row_dict = {
+                headers[j]: (row[j] if j < len(row) and row[j] != '' else None)
+                for j in range(len(headers))
+            }
+            has_date = any(v is not None and self._parse_date(v) is not None for v in row_dict.values())
+            has_num = any(isinstance(v, (int, float)) for v in row_dict.values())
+            if has_date and has_num:
+                out.append(row_dict)
         return out
 
     def _parse_pdf(self, file_path: str) -> List[Dict[str, Any]]:
