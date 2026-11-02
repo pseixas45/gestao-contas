@@ -8,6 +8,7 @@ Sistema de gestão de contas bancárias pessoais com:
 """
 
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import engine, Base, ensure_schema
 from app.api.v1.router import api_router
+
+# Commit do build (Render injeta RENDER_GIT_COMMIT automaticamente). Serve para
+# confirmar qual código está no ar — basta um `curl /health` e comparar o SHA.
+GIT_COMMIT = (
+    os.getenv("RENDER_GIT_COMMIT")
+    or os.getenv("GIT_COMMIT")
+    or os.getenv("SOURCE_VERSION")  # fallback (outros PaaS)
+    or "unknown"
+)
 
 # Configurar logging
 logging.basicConfig(
@@ -53,6 +63,7 @@ def root():
     return {
         "message": "Gestão de Contas API",
         "version": "1.0.0",
+        "commit": GIT_COMMIT,
         "docs": "/docs"
     }
 
@@ -60,7 +71,7 @@ def root():
 @app.get("/health")
 def health_check():
     """Verificação de saúde da aplicação."""
-    return {"status": "healthy"}
+    return {"status": "healthy", "commit": GIT_COMMIT}
 
 
 @app.on_event("startup")
