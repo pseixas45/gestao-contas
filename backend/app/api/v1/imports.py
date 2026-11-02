@@ -383,7 +383,8 @@ async def analyze_import(
                 import calendar
                 desc_base = get_installment_base_description(description)
                 prev = find_previous_installment(
-                    db, data.account_id, desc_base, installment_number, installment_total
+                    db, data.account_id, desc_base, installment_number, installment_total,
+                    amount=amount,
                 )
                 if prev:
                     base_date = prev.date
@@ -470,7 +471,9 @@ async def analyze_import(
             fuzzy_match = find_near_duplicate(
                 db, data.account_id, trans_date,
                 amount, original_currency, description,
-                card_payment_date=card_payment_date
+                card_payment_date=card_payment_date,
+                installment_number=installment_number,
+                installment_total=installment_total,
             )
 
             if fuzzy_match:

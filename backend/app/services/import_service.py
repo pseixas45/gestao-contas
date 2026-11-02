@@ -301,6 +301,7 @@ def find_previous_installment(
     description_base: str,
     installment_number: int,
     installment_total: int,
+    amount: Optional[Decimal] = None,
 ) -> Optional[Transaction]:
     """
     Busca a parcela anterior (n-1) no banco para determinar a data correta.
@@ -314,6 +315,12 @@ def find_previous_installment(
         description_base: Descrição sem o sufixo de parcela (ex: "PG *POSITIVO TECN")
         installment_number: Número da parcela atual (ex: 7)
         installment_total: Total de parcelas (ex: 10)
+        amount: Valor da parcela (opcional). Parcelas da MESMA compra têm valor
+            idêntico, então filtrar por valor desambigua quando há várias compras
+            do mesmo estabelecimento com o mesmo nº de parcelas (ex: 3x "Raia
+            1/3" com valores distintos). Sem esse filtro, a parcela anterior era
+            escolhida só pela descrição+nº (a mais recente por data), gerando uma
+            data sintética errada e instável entre exports — o que furava o dedup.
 
     Returns:
         Transaction da parcela anterior ou None
@@ -323,14 +330,19 @@ def find_previous_installment(
 
     prev_number = installment_number - 1
 
-    # Tentativa 1: campos estruturados
-    prev = db.query(Transaction).filter(
+    # Tentativa 1: campos estruturados (com valor, se fornecido, para desambiguar)
+    q1 = db.query(Transaction).filter(
         Transaction.account_id == account_id,
         Transaction.installment_number == prev_number,
         Transaction.installment_total == installment_total,
         Transaction.description.ilike(f"%{description_base}%"),
-    ).order_by(Transaction.date.desc()).first()
-
+    )
+    if amount is not None:
+        prev = q1.filter(Transaction.original_amount == amount).order_by(Transaction.date.desc()).first()
+        if prev:
+            return prev
+        # Fallback: sem o filtro de valor (compat. com dados antigos sem amount exato)
+    prev = q1.order_by(Transaction.date.desc()).first()
     if prev:
         return prev
 
@@ -341,10 +353,15 @@ def find_previous_installment(
         f"%{description_base}%{prev_number:02d}/{installment_total:02d}%",
     ]
     for pattern in patterns:
-        prev = db.query(Transaction).filter(
+        q2 = db.query(Transaction).filter(
             Transaction.account_id == account_id,
             Transaction.description.ilike(pattern),
-        ).order_by(Transaction.date.desc()).first()
+        )
+        if amount is not None:
+            prev = q2.filter(Transaction.original_amount == amount).order_by(Transaction.date.desc()).first()
+            if prev:
+                return prev
+        prev = q2.order_by(Transaction.date.desc()).first()
         if prev:
             return prev
 
@@ -855,7 +872,8 @@ class ImportService:
         ):
             desc_base = get_installment_base_description(description_clean)
             prev_installment = find_previous_installment(
-                self.db, account_id, desc_base, installment_number, installment_total
+                self.db, account_id, desc_base, installment_number, installment_total,
+                amount=original_amount,
             )
 
             if prev_installment:
@@ -933,7 +951,9 @@ class ImportService:
             fuzzy_match = find_near_duplicate(
                 self.db, account_id, effective_date,
                 original_amount, original_currency, description_clean,
-                card_payment_date=card_payment_date
+                card_payment_date=card_payment_date,
+                installment_number=installment_number,
+                installment_total=installment_total,
             )
             if fuzzy_match:
                 existing = fuzzy_match
@@ -1195,7 +1215,7 @@ class ImportService:
                 result.append(row_dict)
 
         wb.close()
-        return result
+        return self._merge_itau_international_rows(result)
 
     # Palavras-chave que identificam a linha de cabeçalho de um extrato.
     # Alguns bancos (Itaú) exportam .xls com logo/metadados antes do cabeçalho.
@@ -1340,7 +1360,65 @@ class ImportService:
                 }
                 result.append(row_dict)
 
-        return result
+        return self._merge_itau_international_rows(result)
+
+    def _merge_itau_international_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Corrige o bloco de lançamentos INTERNACIONAIS da fatura Itaú (cartão).
+
+        O layout do Itaú para compras em moeda estrangeira é:
+            [data] "dólar de conversão" <cotação>   -> a DATA do lançamento fica
+                                                        AQUI; o "valor" é a COTAÇÃO
+                                                        do dólar, não um gasto.
+            [    ] "<estabelecimento>"   <valor R$>  -> o lançamento REAL, sem data.
+            [    ] "valor em dólar"       <valor US$> -> metadado.
+            [    ] "<país>"               <...>       -> metadado.
+
+        Sem tratamento, a linha "dólar de conversão" era importada como um gasto de
+        R$ <cotação> (ex.: R$ 5,28) e o lançamento real (sem data) era descartado
+        pelo _process_row (falha ao parsear a data). Aqui descartamos a linha de
+        cotação e repassamos a data dela para o lançamento internacional seguinte.
+        As linhas de metadado continuam sem data e seguem sendo ignoradas adiante.
+
+        Guarda: só dispara ao encontrar a marca exata "dólar de conversão"
+        (específica da fatura Itaú), então não afeta outros formatos.
+        """
+        import unicodedata
+
+        def _deaccent(s: str) -> str:
+            return ''.join(
+                c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c)
+            )
+
+        def _is_rate_marker(row: Dict[str, Any]) -> bool:
+            for v in row.values():
+                if isinstance(v, str) and 'dolar de conversao' in _deaccent(v).strip().lower():
+                    return True
+            return False
+
+        def _date_key(row: Dict[str, Any]):
+            for k in row:
+                kl = _deaccent(str(k)).lower()
+                if 'data' in kl or 'date' in kl:
+                    return k
+            return None
+
+        out: List[Dict[str, Any]] = []
+        carried_date = None
+        for row in rows:
+            if _is_rate_marker(row):
+                dk = _date_key(row)
+                carried_date = row.get(dk) if dk else None
+                continue  # descarta a linha de cotação (não é um gasto)
+            if carried_date is not None:
+                dk = _date_key(row)
+                if dk and (row.get(dk) is None or self._parse_date(row.get(dk)) is None):
+                    # lançamento internacional sem data -> herda a data da cotação
+                    row = dict(row)
+                    row[dk] = carried_date
+                carried_date = None
+            out.append(row)
+        return out
 
     def _parse_pdf(self, file_path: str) -> List[Dict[str, Any]]:
         """Parse PDF usando tabula."""

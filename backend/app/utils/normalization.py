@@ -201,15 +201,25 @@ def find_near_duplicate(
     description: str,
     exclude_id: Optional[int] = None,
     card_payment_date: Optional[date] = None,
+    installment_number: Optional[int] = None,
+    installment_total: Optional[int] = None,
 ) -> Optional[object]:
     """
     Layer 2: Busca duplicados fuzzy.
 
-    Procura transações no mesmo conta com:
+    Procura transações na mesma conta com:
     - Data dentro de ±1 dia
     - Mesmo valor exato (mesma moeda)
     - Descrição normalizada com similaridade >= 85%
     - card_payment_date compatível (se fornecido)
+
+    Caso especial — PARCELAS de cartão: a data "efetiva" de uma parcela é
+    sintética (calculada a partir da parcela anterior) e pode divergir entre
+    exports do mesmo cartão (ex: a mesma "Raia2966 2/3" caiu em 10-10 num arquivo
+    e 10-22 noutro). A janela de ±1 dia então NÃO pega a re-importação. Por isso,
+    quando há card_payment_date + installment_number/total, buscamos também
+    candidatos pela FATURA (card_payment_date ±1 dia) + mesmo valor + mesma
+    parcela, ignorando a data de compra.
 
     Retorna a transação existente ou None.
     """
@@ -235,7 +245,27 @@ def find_near_duplicate(
     if exclude_id:
         query = query.filter(Transaction.id != exclude_id)
 
-    candidates = query.all()
+    candidates = list(query.all())
+    seen_ids = {c.id for c in candidates}
+
+    # Candidatos adicionais por FATURA+PARCELA (robusto à data sintética divergente)
+    if card_payment_date and installment_number and installment_total:
+        cpd_start = card_payment_date - timedelta(days=1)
+        cpd_end = card_payment_date + timedelta(days=1)
+        inst_query = db.query(Transaction).filter(
+            Transaction.account_id == account_id,
+            Transaction.original_amount == amount,
+            Transaction.original_currency == currency_str,
+            Transaction.installment_number == installment_number,
+            Transaction.installment_total == installment_total,
+            Transaction.card_payment_date.between(cpd_start, cpd_end),
+        )
+        if exclude_id:
+            inst_query = inst_query.filter(Transaction.id != exclude_id)
+        for c in inst_query.all():
+            if c.id not in seen_ids:
+                candidates.append(c)
+                seen_ids.add(c.id)
 
     if not candidates:
         return None
