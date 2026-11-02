@@ -80,14 +80,11 @@ export default function PendentesPage() {
     queryKey: ['suggestions', firstTransactionIds],
     queryFn: async () => {
       const results: Record<number, TransactionSuggestion> = {};
-      await Promise.allSettled(
-        firstTransactionIds.map(async (id) => {
-          try {
-            const s = await transactionsApi.getSuggestion(id);
-            if (s && s.suggested_category_id) results[id] = s;
-          } catch {}
-        })
-      );
+      // Uma única requisição em lote (antes era 1 por grupo = até 20 chamadas HTTP)
+      const list = await transactionsApi.getSuggestionsBatch(firstTransactionIds);
+      list.forEach((s) => {
+        if (s && s.suggested_category_id) results[s.transaction_id] = s;
+      });
       return results;
     },
     enabled: firstTransactionIds.length > 0,

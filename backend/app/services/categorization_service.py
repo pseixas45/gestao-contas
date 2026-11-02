@@ -152,14 +152,24 @@ class CategorizationService:
     def __init__(self, db: Session):
         self.db = db
         self.text_processor = TextProcessor()
+        # Cache das regras ativas por instância: ao categorizar vários lançamentos
+        # com o MESMO serviço (ex.: endpoint em lote), evita recarregar ~900 regras
+        # do banco a cada chamada (era o custo dominante — ~135ms/chamada).
+        self._active_rules_cache = None
 
     def categorize(
         self,
         description: str,
-        amount: float
+        amount: float,
+        track_usage: bool = True
     ) -> Tuple[Optional[int], float, str]:
         """
         Categoriza uma transação.
+
+        Args:
+            track_usage: se True, incrementa o hit_count da regra que casar (uso
+                real — importação, aplicação). Use False em previews/sugestões
+                (rota de leitura) para não gravar no banco a cada consulta.
 
         Returns:
             Tuple[category_id, confidence, method]
@@ -170,7 +180,7 @@ class CategorizationService:
         normalized = self.text_processor.normalize(description)
 
         # 1. Tentar regras manuais (prioridade mais alta)
-        category_id = self._match_rules(description)
+        category_id = self._match_rules(description, track_usage=track_usage)
         if category_id:
             return category_id, 1.0, 'rule'
 
@@ -253,20 +263,25 @@ class CategorizationService:
 
         return None, 0.0
 
-    def _match_rules(self, text: str) -> Optional[int]:
-        """Aplica regras manuais em ordem de prioridade."""
-        rules = (
-            self.db.query(CategorizationRule)
-            .filter(CategorizationRule.is_active == True)
-            .order_by(CategorizationRule.priority.desc())
-            .all()
-        )
+    def _get_active_rules(self):
+        """Regras ativas (ordenadas por prioridade), cacheadas por instância."""
+        if self._active_rules_cache is None:
+            self._active_rules_cache = (
+                self.db.query(CategorizationRule)
+                .filter(CategorizationRule.is_active == True)
+                .order_by(CategorizationRule.priority.desc())
+                .all()
+            )
+        return self._active_rules_cache
 
-        for rule in rules:
+    def _match_rules(self, text: str, track_usage: bool = True) -> Optional[int]:
+        """Aplica regras manuais em ordem de prioridade."""
+        for rule in self._get_active_rules():
             if self._rule_matches(rule, text):
-                # Incrementar contador de uso (flush, não commit — caller controla)
-                rule.hit_count += 1
-                self.db.flush()
+                if track_usage:
+                    # Incrementar contador de uso (flush, não commit — caller controla)
+                    rule.hit_count += 1
+                    self.db.flush()
                 return rule.category_id
 
         return None

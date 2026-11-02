@@ -228,6 +228,14 @@ export const transactionsApi = {
     const response = await api.get(`/transactions/${id}/suggestion`);
     return response.data;
   },
+
+  getSuggestionsBatch: async (ids: number[]): Promise<TransactionSuggestion[]> => {
+    if (ids.length === 0) return [];
+    const response = await api.post('/transactions/suggestions/batch', {
+      transaction_ids: ids,
+    });
+    return response.data;
+  },
 };
 
 // Rules

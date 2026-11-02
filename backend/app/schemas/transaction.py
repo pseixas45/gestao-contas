@@ -115,6 +115,11 @@ class TransactionSuggestion(BaseModel):
     method: str  # 'rule', 'history', 'ml'
 
 
+class SuggestionBatchRequest(BaseModel):
+    """Pedido de sugestões em lote (uma requisição para várias transações)."""
+    transaction_ids: List[int]
+
+
 class TransactionImportData(BaseModel):
     """Dados de transação para importação."""
     date: datetime.date

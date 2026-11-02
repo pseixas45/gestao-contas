@@ -2,7 +2,7 @@ import logging
 from typing import List, Optional
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_, or_
 from datetime import date
 
@@ -12,7 +12,8 @@ from app.models.exchange_rate import CurrencyCode
 from app.services.balance_log_service import log_balance_change
 from app.schemas.transaction import (
     TransactionCreate, TransactionUpdate, TransactionResponse,
-    TransactionFilter, BulkCategorize, TransactionSuggestion
+    TransactionFilter, BulkCategorize, TransactionSuggestion,
+    SuggestionBatchRequest
 )
 from app.utils.security import get_current_active_user
 from app.services.categorization_service import CategorizationService
@@ -206,7 +207,7 @@ def list_pending_transactions(
     current_user: User = Depends(get_current_active_user)
 ):
     """Listar transações pendentes de categorização."""
-    query = db.query(Transaction).filter(
+    query = db.query(Transaction).options(joinedload(Transaction.account)).filter(
         or_(
             Transaction.category_id == None,
             Transaction.is_validated == False
@@ -575,7 +576,8 @@ def get_category_suggestion(
     categorization_service = CategorizationService(db)
     category_id, confidence, method = categorization_service.categorize(
         transaction.description,
-        float(transaction.amount)
+        float(transaction.amount),
+        track_usage=False  # preview: não gravar hit_count
     )
 
     category_name = None
@@ -591,3 +593,42 @@ def get_category_suggestion(
         confidence=confidence,
         method=method
     )
+
+
+@router.post("/suggestions/batch", response_model=List[TransactionSuggestion])
+def get_category_suggestions_batch(
+    payload: SuggestionBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Sugestões de categoria para VÁRIAS transações numa única requisição.
+
+    Substitui N chamadas a /{id}/suggestion (uma por transação) por uma só:
+    reusa o MESMO CategorizationService (regras carregadas 1x em vez de N),
+    e não grava hit_count (é preview). Usado pela tela de Pendentes.
+    """
+    ids = payload.transaction_ids[:100]  # teto de segurança
+    if not ids:
+        return []
+
+    transactions = db.query(Transaction).filter(Transaction.id.in_(ids)).all()
+
+    service = CategorizationService(db)
+    # Nomes de categoria resolvidos em lote (evita 1 query por sugestão)
+    category_names = dict(db.query(Category.id, Category.name).all())
+
+    result = []
+    for t in transactions:
+        category_id, confidence, method = service.categorize(
+            t.description, float(t.amount), track_usage=False
+        )
+        result.append(TransactionSuggestion(
+            transaction_id=t.id,
+            suggested_category_id=category_id,
+            suggested_category_name=category_names.get(category_id) if category_id else None,
+            confidence=confidence,
+            method=method
+        ))
+
+    return result
