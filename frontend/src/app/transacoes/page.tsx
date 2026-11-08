@@ -302,6 +302,15 @@ function TransacoesPageContent() {
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  // Atualiza um ou mais filtros e SEMPRE volta para a página 1. Sem isso, se o
+  // usuário estivesse numa página > 1 e aplicasse um filtro/busca com poucos
+  // resultados, a tela pediria a página N (vazia) e mostraria "Nenhuma transação
+  // encontrada" mesmo o registro existindo.
+  const updateFilters = (patch: Partial<typeof filters>) => {
+    setFilters((prev) => ({ ...prev, ...patch }));
+    setPage(1);
+  };
+
   // Inicializar filtro de conta a partir da URL
   useEffect(() => {
     const accountId = searchParams.get('account_id');
@@ -452,14 +461,14 @@ function TransacoesPageContent() {
               <Select
                 placeholder="Todas as contas"
                 value={filters.account_id}
-                onChange={(e) => setFilters({ ...filters, account_id: e.target.value })}
+                onChange={(e) => updateFilters({account_id: e.target.value })}
                 options={accounts.map((a) => ({ value: a.id, label: a.name }))}
               />
 
               <Select
                 placeholder="Todas as categorias"
                 value={filters.category_id}
-                onChange={(e) => setFilters({ ...filters, category_id: e.target.value })}
+                onChange={(e) => updateFilters({category_id: e.target.value })}
                 options={[
                   { value: 0, label: '⏳ Pendente (sem categoria)' },
                   ...categories.map((c) => ({ value: c.id, label: c.name })),
@@ -470,14 +479,14 @@ function TransacoesPageContent() {
                 type="date"
                 placeholder="Data inicial"
                 value={filters.start_date}
-                onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
+                onChange={(e) => updateFilters({start_date: e.target.value })}
               />
 
               <Input
                 type="date"
                 placeholder="Data final"
                 value={filters.end_date}
-                onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
+                onChange={(e) => updateFilters({end_date: e.target.value })}
               />
 
               <div className="relative">
@@ -486,7 +495,7 @@ function TransacoesPageContent() {
                   className="pl-10"
                   placeholder="Buscar..."
                   value={filters.search}
-                  onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                  onChange={(e) => updateFilters({search: e.target.value })}
                 />
               </div>
             </div>
@@ -499,7 +508,7 @@ function TransacoesPageContent() {
                 <Input
                   type="date"
                   value={filters.card_payment_start}
-                  onChange={(e) => setFilters({ ...filters, card_payment_start: e.target.value })}
+                  onChange={(e) => updateFilters({card_payment_start: e.target.value })}
                 />
               </div>
               <div>
@@ -507,7 +516,7 @@ function TransacoesPageContent() {
                 <Input
                   type="date"
                   value={filters.card_payment_end}
-                  onChange={(e) => setFilters({ ...filters, card_payment_end: e.target.value })}
+                  onChange={(e) => updateFilters({card_payment_end: e.target.value })}
                 />
               </div>
             </div>
