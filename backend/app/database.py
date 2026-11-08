@@ -36,10 +36,20 @@ elif settings.DATABASE_URL.startswith("postgresql") or settings.DATABASE_URL.sta
     }
 
     if is_pgbouncer:
-        # pgbouncer transaction mode: cada query pode pegar conexão diferente.
-        # Desabilitar prepared statements e deixar pgbouncer cuidar do pool.
-        from sqlalchemy.pool import NullPool
-        pg_kwargs["poolclass"] = NullPool
+        # Pooler do Supabase (pgbouncer). Mantemos um pool client-side PEQUENO e
+        # "quente" para NÃO reabrir a conexão a cada request: o backend (Render,
+        # Ohio) e o banco (Supabase, São Paulo) ficam em regiões diferentes, então
+        # o handshake TCP+TLS de uma conexão nova custa ~300-400ms cross-region.
+        # Reaproveitando a conexão, esse custo some do caminho de cada request.
+        # Prepared statements ficam desabilitados (prepare_threshold=None, abaixo)
+        # por compatibilidade com o transaction pooling; o schema é resolvido via
+        # MetaData(schema=...) qualificado, então não dependemos de search_path
+        # preso a uma conexão específica.
+        pg_kwargs["pool_pre_ping"] = True
+        pg_kwargs["pool_recycle"] = 1800
+        pg_kwargs["pool_size"] = 5
+        pg_kwargs["max_overflow"] = 5
+        pg_kwargs["pool_timeout"] = 30
     else:
         pg_kwargs["pool_pre_ping"] = True
         pg_kwargs["pool_recycle"] = 300

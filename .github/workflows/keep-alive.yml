@@ -1,0 +1,40 @@
+name: keep-alive
+
+# Evita a pausa por inatividade do free tier do Supabase (~7 dias sem atividade
+# no banco derruba o ambiente inteiro até restauração manual no painel).
+# Bate 1x/dia no endpoint /health/db do backend, que executa um SELECT 1 e
+# reseta o timer de inatividade do projeto Supabase. De quebra, acorda o Render
+# (free dorme após 15 min) e confirma que a stack está de pé.
+
+on:
+  schedule:
+    # 11:00 UTC = 08:00 BRT, todo dia. GitHub pode atrasar/pular alguns minutos
+    # no free tier; rodar diariamente dá folga sobre a janela de 7 dias.
+    - cron: "0 11 * * *"
+  workflow_dispatch: {}  # permite rodar manualmente pelo painel Actions
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health/db (keep Supabase + Render acordados)
+        run: |
+          URL="${KEEP_ALIVE_URL:-https://gestao-contas-api.onrender.com/health/db}"
+          echo "Pinging $URL"
+          # Render free pode levar ~30-50s para acordar (cold start). Retry com
+          # tempo generoso; falha só se não responder 200 após as tentativas.
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/body.txt -w "%{http_code}" --max-time 90 "$URL" || echo 000)
+            echo "tentativa $i -> HTTP $code"
+            cat /tmp/body.txt; echo
+            if [ "$code" = "200" ]; then
+              echo "OK: banco ativo."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "FALHOU: /health/db não retornou 200 após 5 tentativas."
+          exit 1
+    env:
+      # Opcional: defina a secret/variable KEEP_ALIVE_URL se a URL do backend mudar.
+      KEEP_ALIVE_URL: ${{ vars.KEEP_ALIVE_URL }}

@@ -10,11 +10,13 @@ Sistema de gestão de contas bancárias pessoais com:
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import engine, Base, ensure_schema
+from app.database import engine, Base, ensure_schema, get_db
 from app.api.v1.router import api_router
 
 # Commit do build (Render injeta RENDER_GIT_COMMIT automaticamente). Serve para
@@ -72,6 +74,19 @@ def root():
 def health_check():
     """Verificação de saúde da aplicação."""
     return {"status": "healthy", "commit": GIT_COMMIT}
+
+
+@app.get("/health/db")
+def health_db(db: Session = Depends(get_db)):
+    """Keep-alive do banco.
+
+    Executa um `SELECT 1` para gerar atividade real no Postgres. O free tier do
+    Supabase pausa o projeto após ~7 dias sem atividade (o que derruba todo o
+    ambiente até restauração manual). Um cron batendo neste endpoint uma vez por
+    dia reseta o timer de inatividade. Também serve como health check real da
+    conexão com o banco (diferente de /health, que não toca o DB)."""
+    db.execute(text("SELECT 1"))
+    return {"status": "healthy", "db": "ok", "commit": GIT_COMMIT}
 
 
 @app.on_event("startup")
